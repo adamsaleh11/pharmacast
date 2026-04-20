@@ -18,9 +18,12 @@ export function CsvUploadZone({ locationId, onSuccess }: CsvUploadZoneProps) {
   const { state, error, filename, summary, startUpload, reset } = useCsvUpload(locationId);
   const [isDragging, setIsDragging] = useState(false);
   const onSuccessRef = useRef(onSuccess);
-  onSuccessRef.current = onSuccess;
 
   const hasRedirectedRef = useRef(false);
+
+  useEffect(() => {
+    onSuccessRef.current = onSuccess;
+  }, [onSuccess]);
 
   useEffect(() => {
     const callback = onSuccessRef.current;
@@ -194,7 +197,7 @@ export function CsvUploadZone({ locationId, onSuccess }: CsvUploadZoneProps) {
             <div className="mt-4 flex items-center gap-3">
               <div className="flex items-center gap-1.5 text-xs text-teal-700">
                 <CheckCircle2 className="h-3 w-3" />
-                Redirecting to dashboard...
+                Data updated safely. Redirecting to dashboard...
               </div>
               {onSuccess && (
                 <Button size="sm" variant="teal" onClick={onSuccess}>

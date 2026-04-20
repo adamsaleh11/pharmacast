@@ -19,6 +19,7 @@
     "@supabase/ssr": "latest",
     "@supabase/supabase-js": "latest",
     "@tanstack/react-query": "latest",
+    "@tanstack/react-virtual": "^3.13.24",
     "class-variance-authority": "latest",
     "clsx": "latest",
     "lucide-react": "latest",

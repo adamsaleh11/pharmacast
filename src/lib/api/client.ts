@@ -7,6 +7,7 @@ type ApiClientOptions = {
 export type ApiClient = {
   get<TResponse>(path: string, options?: ApiClientOptions): Promise<TResponse>;
   post<TResponse>(path: string, body?: unknown, options?: ApiClientOptions): Promise<TResponse>;
+  put<TResponse>(path: string, body?: unknown, options?: ApiClientOptions): Promise<TResponse>;
 };
 
 export class ApiError extends Error {
@@ -103,6 +104,11 @@ export function createApiClient(): ApiClient {
     post: (path, body, options = {}) =>
       request(path, options, {
         method: "POST",
+        body: body === undefined ? undefined : JSON.stringify(body)
+      }),
+    put: (path, body, options = {}) =>
+      request(path, options, {
+        method: "PUT",
         body: body === undefined ? undefined : JSON.stringify(body)
       })
   };

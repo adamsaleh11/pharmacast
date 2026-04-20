@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { CsvUploadZone } from "./csv-upload-zone";
 import { useCsvUpload } from "@/hooks/use-csv-upload";
@@ -8,6 +8,7 @@ vi.mock("@/hooks/use-csv-upload", () => ({
 }));
 
 const mockUseCsvUpload = vi.mocked(useCsvUpload);
+type CsvUploadHookState = ReturnType<typeof useCsvUpload>;
 
 describe("CsvUploadZone", () => {
   const locationId = "location-123";
@@ -24,7 +25,7 @@ describe("CsvUploadZone", () => {
       summary: null,
       startUpload: vi.fn(),
       reset: vi.fn()
-    } as any);
+    } as CsvUploadHookState);
 
     render(<CsvUploadZone locationId={locationId} />);
 
@@ -41,7 +42,7 @@ describe("CsvUploadZone", () => {
       summary: null,
       startUpload,
       reset: vi.fn()
-    } as any);
+    } as CsvUploadHookState);
 
     render(<CsvUploadZone locationId={locationId} />);
 
@@ -61,7 +62,7 @@ describe("CsvUploadZone", () => {
       summary: null,
       startUpload: vi.fn(),
       reset: vi.fn()
-    } as any);
+    } as CsvUploadHookState);
 
     render(<CsvUploadZone locationId={locationId} />);
 
@@ -85,7 +86,7 @@ describe("CsvUploadZone", () => {
       },
       startUpload: vi.fn(),
       reset: vi.fn()
-    } as any);
+    } as CsvUploadHookState);
 
     render(<CsvUploadZone locationId={locationId} />);
 
@@ -104,7 +105,7 @@ describe("CsvUploadZone", () => {
       summary: null,
       startUpload: vi.fn(),
       reset
-    } as any);
+    } as CsvUploadHookState);
 
     render(<CsvUploadZone locationId={locationId} />);
 

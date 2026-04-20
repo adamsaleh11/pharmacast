@@ -1,9 +1,10 @@
 import { renderHook, act, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useCsvUpload } from "./use-csv-upload";
 import { uploadCsv, getUploadDetail } from "@/lib/api/upload";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getBackendAccessToken } from "@/lib/supabase/session";
+import type { UploadResponse } from "@/types/upload";
 
 vi.mock("@/lib/api/upload", () => ({
   uploadCsv: vi.fn(),
@@ -22,6 +23,7 @@ const mockUploadCsv = vi.mocked(uploadCsv);
 const mockGetUploadDetail = vi.mocked(getUploadDetail);
 const mockCreateSupabaseBrowserClient = vi.mocked(createSupabaseBrowserClient);
 const mockGetBackendAccessToken = vi.mocked(getBackendAccessToken);
+type SupabaseUploadTestClient = NonNullable<ReturnType<typeof createSupabaseBrowserClient>>;
 
 describe("useCsvUpload", () => {
   const locationId = "location-123";
@@ -44,7 +46,7 @@ describe("useCsvUpload", () => {
     mockCreateSupabaseBrowserClient.mockReset();
     mockGetBackendAccessToken.mockReset();
     mockGetBackendAccessToken.mockResolvedValue("mock-token");
-    mockCreateSupabaseBrowserClient.mockReturnValue(mockSupabase as any);
+    mockCreateSupabaseBrowserClient.mockReturnValue(mockSupabase as unknown as SupabaseUploadTestClient);
   });
 
   it("transitions from idle to uploading to processing", async () => {
@@ -88,7 +90,7 @@ describe("useCsvUpload", () => {
       drugCount: null,
       validationSummary: null,
       uploadedAt: new Date().toISOString()
-    } as any);
+    } satisfies UploadResponse);
 
     const { result } = renderHook(() => useCsvUpload(locationId));
 
@@ -109,7 +111,7 @@ describe("useCsvUpload", () => {
       drugCount: 5,
       validationSummary: JSON.stringify({ total_rows: 10, unique_dins: 5 }),
       uploadedAt: new Date().toISOString()
-    } as any);
+    } satisfies UploadResponse);
 
     // Advance for poll
     await act(async () => {
