@@ -40,7 +40,7 @@ Create the frontend-only Next.js foundation at the repository root with App Rout
 
 ### What to build
 
-Add the PharmaForecast design system foundation: clinical color tokens, global CSS variables, Tailwind theme mapping, Geist fonts, shadcn/ui configuration, and reusable UI primitives. Include enum-backed badges for backend status and forecast confidence display.
+Add the PharmaCast design system foundation: clinical color tokens, global CSS variables, Tailwind theme mapping, Geist fonts, shadcn/ui configuration, and reusable UI primitives. Include enum-backed badges for backend status and forecast confidence display.
 
 ### Acceptance criteria
 

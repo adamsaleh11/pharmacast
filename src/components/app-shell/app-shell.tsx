@@ -1,15 +1,40 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect } from "react";
 import { Bell, Building2, LogOut, MapPin, Menu, Pill } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { productNavigation } from "@/components/app-shell/navigation";
+import { acknowledgeBackendLogout } from "@/lib/api/auth";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
+import { useAppContext } from "@/providers/app-context";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const { authError, authReady, user, organization, currentLocation } = useAppContext();
+  const organizationName = organization?.name ?? "Organization";
+  const locationName = currentLocation?.name ?? "Location";
+  const userLabel = user?.role ? user.role[0].toUpperCase() + user.role.slice(1) : "User";
+  const fallback = user?.email ? user.email.slice(0, 2).toUpperCase() : "PF";
+
+  async function handleSignOut() {
+    const supabase = createSupabaseBrowserClient();
+    const accessToken = (await supabase?.auth.getSession())?.data.session?.access_token;
+
+    await supabase?.auth.signOut();
+    await acknowledgeBackendLogout(accessToken).catch(() => undefined);
+    window.location.assign("/login");
+  }
+
+  useEffect(() => {
+    if (authReady && authError === "USER_PROFILE_NOT_BOOTSTRAPPED") {
+      router.replace("/onboarding");
+    }
+  }, [authError, authReady, router]);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -19,7 +44,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <Pill className="h-5 w-5" aria-hidden="true" />
           </span>
           <span>
-            <span className="block text-sm font-semibold">PharmaForecast</span>
+            <span className="block text-sm font-semibold">PharmaCast</span>
             <span className="block text-xs text-white/60">Inventory intelligence</span>
           </span>
         </Link>
@@ -52,11 +77,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </Button>
             <div className="hidden items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 sm:flex">
               <Building2 className="h-4 w-4 text-pharma-teal" aria-hidden="true" />
-              Ottawa Independent Pharmacy
+              {organizationName}
             </div>
             <div className="hidden items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 md:flex">
               <MapPin className="h-4 w-4 text-pharma-teal" aria-hidden="true" />
-              Bank Street
+              {locationName}
             </div>
           </div>
 
@@ -66,10 +91,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </Button>
             <div className="flex items-center gap-2 rounded-md border border-slate-200 px-2 py-1.5">
               <Avatar>
-                <AvatarFallback>PF</AvatarFallback>
+                <AvatarFallback>{fallback}</AvatarFallback>
               </Avatar>
-              <span className="hidden text-sm font-medium text-slate-700 sm:inline">Owner</span>
-              <LogOut className="hidden h-4 w-4 text-muted-foreground sm:block" aria-hidden="true" />
+              <span className="hidden text-sm font-medium text-slate-700 sm:inline">{userLabel}</span>
+              <Button className="hidden h-7 w-7 sm:inline-flex" variant="ghost" size="icon" aria-label="Sign out" onClick={handleSignOut}>
+                <LogOut className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+              </Button>
             </div>
           </div>
         </header>

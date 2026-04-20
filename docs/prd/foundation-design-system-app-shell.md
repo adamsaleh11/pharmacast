@@ -1,6 +1,6 @@
 ## Problem Statement
 
-Independent pharmacies using PharmaForecast need a fast, trustworthy frontend foundation before business workflows can be built. The product will eventually help pharmacy teams upload dispensing history, forecast drug demand, identify reorder risk, understand inventory trends, receive alerts, chat with an assistant, and draft purchase orders. Today there is no Next.js application scaffold, no shared design system, no app shell, no route structure, no provider layer, and no frontend integration seams for Supabase or the Spring Boot API.
+Independent pharmacies using PharmaCast need a fast, trustworthy frontend foundation before business workflows can be built. The product will eventually help pharmacy teams upload dispensing history, forecast drug demand, identify reorder risk, understand inventory trends, receive alerts, chat with an assistant, and draft purchase orders. Today there is no Next.js application scaffold, no shared design system, no app shell, no route structure, no provider layer, and no frontend integration seams for Supabase or the Spring Boot API.
 
 This matters now because later product slices depend on stable layout, navigation, theme tokens, shared components, and API-ready boundaries. Without this foundation, each future feature would make its own UI, data-loading, and layout decisions, creating inconsistency and integration churn.
 
@@ -8,7 +8,7 @@ The affected users are pharmacy owners, pharmacists, and staff at independent ph
 
 ## Solution
 
-Create a frontend-only Next.js application foundation for PharmaForecast. The app will use the App Router, TypeScript, Tailwind CSS, shadcn/ui, React Query, Supabase client libraries, and lucide-react. It will establish a compact clinical design direction using deep navy, teal, status colors, crisp white surfaces, Geist fonts, and reusable UI primitives.
+Create a frontend-only Next.js application foundation for PharmaCast. The app will use the App Router, TypeScript, Tailwind CSS, shadcn/ui, React Query, Supabase client libraries, and lucide-react. It will establish a compact clinical design direction using deep navy, teal, status colors, crisp white surfaces, Geist fonts, and reusable UI primitives.
 
 The app will provide an authenticated-product-shaped shell without enforcing authentication yet. Desktop users will see a sidebar and top bar. Mobile users will see a responsive navigation pattern. The top bar will include placeholders for organization, location, notifications, and avatar/logout. Product pages will be static, realistic, and API-ready but will not call real backend endpoints.
 

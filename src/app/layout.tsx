@@ -3,7 +3,7 @@ import "./globals.css";
 import { AppProviders } from "@/providers/app-providers";
 
 export const metadata: Metadata = {
-  title: "PharmaForecast",
+  title: "PharmaCast",
   description: "Drug demand forecasting for independent pharmacies."
 };
 

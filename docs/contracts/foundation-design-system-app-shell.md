@@ -1,7 +1,7 @@
 # Implementation Handoff Contract
 
 ## 1. Summary
-- Implemented the PharmaForecast frontend foundation in the `pharmacast` frontend repository.
+- Implemented the PharmaCast frontend foundation in the `pharmacast` frontend repository.
 - Implemented a Next.js App Router scaffold with TypeScript, Tailwind CSS, shadcn-compatible configuration, React Query, Supabase client dependencies, lucide-react, ESLint, Vitest, and Testing Library.
 - Implemented the compact clinical design system foundation using navy `#0F1F3D`, teal `#0D9488`, green `#16A34A`, amber `#D97706`, red `#DC2626`, crisp white surfaces, status colors, and Geist font-family tokens.
 - Implemented an app shell with desktop sidebar, mobile navigation bar, top bar placeholders for organization/location/notifications/avatar/logout, and active route styling.
@@ -10,7 +10,7 @@
 - Implemented app providers with React Query and placeholder application context for future auth/user/organization/location integration.
 - Implemented integration-ready environment access, Supabase browser client factory, and Spring Boot API client skeleton.
 - Implemented PRD and phased plan documentation for this frontend foundation.
-- Why it was implemented: future PharmaForecast frontend slices need stable routing, theme tokens, shell layout, provider wiring, reusable UI primitives, and API seams before business workflows are added.
+- Why it was implemented: future PharmaCast frontend slices need stable routing, theme tokens, shell layout, provider wiring, reusable UI primitives, and API seams before business workflows are added.
 - In scope: frontend scaffold, design system foundation, app shell, static page stubs, shared UI primitives, provider layer, API-ready client seams, tests, PRD, plan, and this contract.
 - Out of scope: real Supabase auth, route protection, real Spring Boot API calls, CSV upload behavior, forecasting behavior, LLM/Grok behavior, notifications, Stripe billing, purchase order generation, real onboarding, backend changes, and deployment setup.
 - Owner: frontend-only Next.js application in `/Users/adamsaleh/Downloads/pharmacast`.
@@ -23,7 +23,7 @@
 - `next-env.d.ts`: created. Next.js TypeScript environment declarations.
 - `tsconfig.json`: created and updated by Next build. Uses strict TypeScript, `moduleResolution: "bundler"`, alias `@/* -> ./src/*`, `jsx: "react-jsx"`, and includes `.next/types/**/*.ts` plus `.next/dev/types/**/*.ts`.
 - `postcss.config.mjs`: created. Configures `tailwindcss` and `autoprefixer`.
-- `tailwind.config.ts`: created. Configures content paths, class-based dark mode, shadcn CSS-variable colors, PharmaForecast colors, radius values, and Geist font-family variables.
+- `tailwind.config.ts`: created. Configures content paths, class-based dark mode, shadcn CSS-variable colors, PharmaCast colors, radius values, and Geist font-family variables.
 - `components.json`: created. shadcn/ui configuration using `new-york`, `neutral`, CSS variables, `src/components/ui`, `src/lib/utils`, and lucide icons.
 - `eslint.config.mjs`: created. Uses `eslint-config-next/core-web-vitals` and `eslint-config-next/typescript`, ignores `.next/**`, `node_modules/**`, and `coverage/**`.
 - `vitest.config.ts`: created. Configures Vitest with React plugin, jsdom, globals, setup file, CSS handling, and `@` alias.
@@ -182,7 +182,7 @@
 - Status codes or result states: static prerendered route
 - Error shapes: NOT IMPLEMENTED
 - Example input: browser request to `/login`
-- Example output: page titled `Sign in to PharmaForecast`
+- Example output: page titled `Sign in to PharmaCast`
 
 ### Route `/reset-password`
 - Name: `/reset-password`
@@ -654,7 +654,7 @@
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`: public Supabase anon key. Optional in this scaffold. Missing value becomes `""`; `hasSupabaseConfig` is `false`.
 - `NEXT_PUBLIC_API_URL`: public Spring Boot API base URL. Optional in this scaffold. Missing value becomes `""`; `hasApiConfig` is `false`; `createApiClient().get()` throws if called without it.
 - `components.json`: shadcn configuration. Uses `new-york`, `neutral`, CSS variables, `src/components/ui`, `src/lib/utils`, and lucide icons.
-- `tailwind.config.ts`: Tailwind configuration. Defines content globs, CSS-variable theme colors, PharmaForecast color constants, radius values, and Geist font-family variables.
+- `tailwind.config.ts`: Tailwind configuration. Defines content globs, CSS-variable theme colors, PharmaCast color constants, radius values, and Geist font-family variables.
 - `postcss.config.mjs`: PostCSS configuration. Uses `tailwindcss` and `autoprefixer`.
 - `eslint.config.mjs`: ESLint flat configuration. Uses Next core web vitals and TypeScript configs.
 - `vitest.config.ts`: test configuration. Uses jsdom, globals, Testing Library setup, CSS support, and `@` alias.
@@ -730,7 +730,7 @@
 - Breaking changes from previous version: repository metadata was promoted from nested `/Users/adamsaleh/Downloads/pharmacast/pharmacast` to root `/Users/adamsaleh/Downloads/pharmacast`; stale root `.next/` artifact was removed before scaffolding.
 
 ## 12. Copy-Paste Handoff for the Next Engineer
-The PharmaForecast frontend foundation is implemented: Next.js App Router scaffold, TypeScript, Tailwind/shadcn-compatible theme, compact clinical app shell, product/plain route stubs, shared UI primitives, React Query provider, placeholder app context, Supabase client seam, Spring Boot API client seam, PRD, plan, tests, and this contract.
+The PharmaCast frontend foundation is implemented: Next.js App Router scaffold, TypeScript, Tailwind/shadcn-compatible theme, compact clinical app shell, product/plain route stubs, shared UI primitives, React Query provider, placeholder app context, Supabase client seam, Spring Boot API client seam, PRD, plan, tests, and this contract.
 
 It is safe to depend on the route names, `AppShell`, shared product component names, badge enum values, public env var names, and the rule that frontend business calls go through Spring Boot only.
 

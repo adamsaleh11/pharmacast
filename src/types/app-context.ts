@@ -12,11 +12,15 @@ export type AppOrganization = {
 export type AppLocation = {
   id: string;
   name: string;
+  address?: string;
 };
 
 export type AppContextValue = {
   authReady: boolean;
   user: AppUser | null;
   organization: AppOrganization | null;
-  location: AppLocation | null;
+  locations: AppLocation[];
+  currentLocation: AppLocation | null;
+  setCurrentLocation: (location: AppLocation | null) => void;
+  authError: string | null;
 };
