@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { AlertCircle, CheckCircle2, FileUp, Pill } from "lucide-react";
+import { AlertCircle, CheckCircle2, Pill } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { CsvUploadZone } from "@/components/product/csv-upload-zone";
 import { bootstrapFirstOwner, getCurrentAuthUser, ApiError } from "@/lib/api/auth";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getBackendAccessToken } from "@/lib/supabase/session";
-import type { SignupBootstrapMetadata } from "@/types/auth";
+import type { SignupBootstrapMetadata, AuthBootstrapResponse } from "@/types/auth";
 
 const SIGNUP_COOLDOWN_MS = 60 * 1000;
 const SIGNUP_IDEMPOTENCY_KEY = "pharmacast_signup_idempotency";
@@ -70,18 +71,10 @@ export default function OnboardingPage() {
   const [pharmacyName, setPharmacyName] = useState("");
   const [locationName, setLocationName] = useState("");
   const [locationAddress, setLocationAddress] = useState("");
+  const [locationId, setLocationId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmationRequired, setConfirmationRequired] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [cooldownRemaining, setCooldownRemaining] = useState(0);
-  const [hasExistingSession, setHasExistingSession] = useState(false);
-
-  useEffect(() => {
-    const checkCooldown = () => setCooldownRemaining(getSignupCooldownRemaining());
-    checkCooldown();
-    const interval = setInterval(checkCooldown, 1000);
-    return () => clearInterval(interval);
-  }, []);
 
   useEffect(() => {
     const supabase = createSupabaseBrowserClient();
@@ -89,7 +82,8 @@ export default function OnboardingPage() {
 
     supabase.auth.getSession().then(async ({ data }) => {
       const session = data.session;
-      setHasExistingSession(Boolean(session));
+
+      if (!session?.access_token) return;
 
       const metadata = session?.user?.user_metadata as Partial<SignupBootstrapMetadata> | undefined;
       if (metadata) {
@@ -97,8 +91,6 @@ export default function OnboardingPage() {
         setLocationName((current) => current || metadata.location_name || "");
         setLocationAddress((current) => current || metadata.location_address || "");
       }
-
-      if (!session?.access_token) return;
 
       try {
         const profile = await getCurrentAuthUser(session.access_token);
@@ -117,21 +109,20 @@ export default function OnboardingPage() {
     supabase: NonNullable<ReturnType<typeof createSupabaseBrowserClient>>,
     metadata: SignupBootstrapMetadata,
     label: string
-  ) {
+  ): Promise<AuthBootstrapResponse | undefined> {
     try {
       const accessToken = await getBackendAccessToken(supabase, label);
       if (!accessToken) {
         throw new Error("No Supabase session access token. Please sign in again.");
       }
 
-      await bootstrapFirstOwner(accessToken, metadata);
+      return await bootstrapFirstOwner(accessToken, metadata);
     } catch (bootstrapError) {
       if (bootstrapError instanceof ApiError && bootstrapError.status === 401) {
         const { data } = await supabase.auth.refreshSession();
         if (data.session?.access_token) {
           try {
-            await bootstrapFirstOwner(data.session.access_token, metadata);
-            return;
+            return await bootstrapFirstOwner(data.session.access_token, metadata);
           } catch (retryError) {
             bootstrapError = retryError;
           }
@@ -140,7 +131,7 @@ export default function OnboardingPage() {
 
       if (bootstrapError instanceof ApiError && bootstrapError.status === 400) {
         if (bootstrapError.code === "USER_ALREADY_BOOTSTRAPPED") {
-          return;
+          return undefined;
         }
         throw new Error("Check the pharmacy and location details before continuing.");
       }
@@ -166,25 +157,29 @@ export default function OnboardingPage() {
       return;
     }
 
+    if (step === 2 && nextStep === 3) {
+      handleAccountSetup().then((id) => {
+        if (id) {
+          setLocationId(id);
+          setStep(3);
+        }
+      });
+      return;
+    }
+
     setStep(nextStep);
   }
 
-  async function handleSubmit() {
-    if (isSubmitting) return;
+  async function handleAccountSetup(): Promise<string | null> {
+    if (isSubmitting) return null;
 
     setError(null);
-
-    if (!locationName.trim() || !locationAddress.trim()) {
-      setError("Add the first location name and address.");
-      setStep(2);
-      return;
-    }
 
     const supabase = createSupabaseBrowserClient();
 
     if (!supabase) {
       setError("Supabase is not configured.");
-      return;
+      return null;
     }
 
     const metadata: SignupBootstrapMetadata = {
@@ -195,80 +190,70 @@ export default function OnboardingPage() {
 
     setIsSubmitting(true);
 
-    const existingSession = await supabase.auth.getSession();
-
-    if (existingSession.data.session?.access_token) {
-      try {
-        await completeBootstrap(supabase, metadata, "auth/bootstrap existing session");
-        clearSignupAttemptState();
-        openDashboard();
-      } catch (bootstrapError) {
-        setError(bootstrapError instanceof Error ? bootstrapError.message : "Unable to finish pharmacy setup.");
-      } finally {
-        setIsSubmitting(false);
-      }
-      return;
-    }
-
-    const cooldown = getSignupCooldownRemaining();
-    if (cooldown > 0) {
-      setIsSubmitting(false);
-      setError(`Please wait ${Math.ceil(cooldown / 1000)} seconds before trying again.`);
-      return;
-    }
-
-    recordSignupAttempt();
-    const idempotencyKey = getSignupIdempotencyKey();
-
-    const { data, error: signUpError } = await supabase.auth.signUp({
-      email: email.trim(),
-      password,
-      options: {
-        data: { ...metadata, idempotencyKey },
-        emailRedirectTo: getSignupRedirectUrl()
-      }
-    });
-
-    if (signUpError) {
-      setIsSubmitting(false);
-
-      const errorMessage = signUpError.message;
-
-      if (errorMessage.includes("rate limit") || errorMessage.includes("over_email_send_rate_limit")) {
-        setError("Too many attempts. Please wait a moment and try again.");
-        return;
-      }
-
-      if (errorMessage.includes("invalid") || errorMessage.includes("Invalid")) {
-        setError("Please enter a valid email address.");
-        return;
-      }
-
-      if (errorMessage.includes("already registered")) {
-        setError("An account already exists for that email.");
-        return;
-      }
-
-      setError("Unable to create account. Try again in a moment.");
-      return;
-    }
-
-    if (!data.session) {
-      setIsSubmitting(false);
-      setConfirmationRequired(true);
-      return;
-    }
-
     try {
-      await completeBootstrap(supabase, metadata, "auth/bootstrap after signup");
+      const existingSession = await supabase.auth.getSession();
+
+      if (existingSession.data.session?.access_token) {
+        try {
+          const result = await completeBootstrap(supabase, metadata, "auth/bootstrap existing session");
+          clearSignupAttemptState();
+          return result?.location_id || null;
+        } catch (err) {
+          if (err instanceof ApiError && err.code === "USER_ALREADY_BOOTSTRAPPED") {
+            const profile = await getCurrentAuthUser(existingSession.data.session.access_token);
+            return profile.locations[0]?.id || null;
+          }
+          throw err;
+        }
+      }
+
+      const cooldown = getSignupCooldownRemaining();
+      if (cooldown > 0) {
+        setError(`Please wait ${Math.ceil(cooldown / 1000)} seconds before trying again.`);
+        return null;
+      }
+
+      recordSignupAttempt();
+      const idempotencyKey = getSignupIdempotencyKey();
+
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: {
+          data: { ...metadata, idempotencyKey },
+          emailRedirectTo: getSignupRedirectUrl()
+        }
+      });
+
+      if (signUpError) {
+        const errorMessage = signUpError.message;
+        if (errorMessage.includes("rate limit") || errorMessage.includes("over_email_send_rate_limit")) {
+          setError("Too many attempts. Please wait a moment and try again.");
+        } else if (errorMessage.includes("invalid") || errorMessage.includes("Invalid")) {
+          setError("Please enter a valid email address.");
+        } else if (errorMessage.includes("already registered")) {
+          setError("An account already exists for that email.");
+        } else {
+          setError("Unable to create account. Try again in a moment.");
+        }
+        return null;
+      }
+
+      if (!data.session) {
+        setConfirmationRequired(true);
+        return null;
+      }
+
+      const result = await completeBootstrap(supabase, metadata, "auth/bootstrap after signup");
       clearSignupAttemptState();
-      openDashboard();
+      return result?.location_id || null;
     } catch (bootstrapError) {
       if (bootstrapError instanceof ApiError && bootstrapError.status === 401) {
         setError(BACKEND_AUTH_REJECTION_MESSAGE);
-        return;
+      } else {
+        setError(bootstrapError instanceof Error ? bootstrapError.message : "Unable to finish pharmacy setup.");
       }
-      setError(bootstrapError instanceof Error ? bootstrapError.message : "Unable to finish pharmacy setup.");
+      return null;
     } finally {
       setIsSubmitting(false);
     }
@@ -430,25 +415,19 @@ export default function OnboardingPage() {
 
         {step === 3 ? (
           <div className="space-y-4">
-            <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
-              <FileUp className="mx-auto h-8 w-8 text-pharma-teal" aria-hidden="true" />
-              <h2 className="mt-3 text-base font-semibold">CSV upload</h2>
-              <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-                Dispensing history upload will be available after account setup.
-              </p>
-            </div>
+            <CsvUploadZone locationId={locationId} onSuccess={openDashboard} />
             <div className="flex flex-col gap-2 sm:flex-row">
-              <Button className="sm:w-auto" type="button" variant="outline" onClick={() => setStep(2)}>
+              <Button className="sm:w-auto" type="button" variant="outline" onClick={() => setStep(2)} disabled={isSubmitting}>
                 Back
               </Button>
               <Button
                 className="flex-1"
                 type="button"
-                variant="teal"
-                onClick={handleSubmit}
-                disabled={isSubmitting || (!hasExistingSession && cooldownRemaining > 0)}
+                variant="ghost"
+                onClick={openDashboard}
+                disabled={isSubmitting}
               >
-                {isSubmitting ? "Creating account..." : !hasExistingSession && cooldownRemaining > 0 ? "Please wait..." : "Skip CSV and finish"}
+                I&apos;ll upload later
               </Button>
             </div>
           </div>

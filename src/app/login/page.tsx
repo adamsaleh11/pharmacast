@@ -136,9 +136,16 @@ function LoginForm() {
         </form>
         <p className="mt-5 text-center text-sm text-muted-foreground">
           New to PharmaCast?{" "}
-          <Link className="font-medium text-pharma-teal hover:underline" href="/onboarding">
+          <span
+            role="link"
+            tabIndex={0}
+            className="font-medium text-pharma-teal hover:underline cursor-pointer"
+            onClick={() => {
+              window.location.replace("/onboarding");
+            }}
+          >
             Create an account
-          </Link>
+          </span>
         </p>
       </section>
     </main>

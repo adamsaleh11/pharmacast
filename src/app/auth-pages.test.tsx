@@ -105,8 +105,6 @@ describe("auth pages", () => {
     await userEvent.type(screen.getByLabelText("First location address"), "100 Bank St, Ottawa, ON");
     await userEvent.click(screen.getByRole("button", { name: "Continue" }));
 
-    await userEvent.click(screen.getByRole("button", { name: "Skip CSV and finish" }));
-
     await waitFor(() =>
       expect(signUp).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -128,7 +126,9 @@ describe("auth pages", () => {
       location_name: "Bank Street",
       location_address: "100 Bank St, Ottawa, ON"
     });
-    expect(push).not.toHaveBeenCalled();
+    
+    // Step 3 should be visible
+    expect(await screen.findByText(/upload dispensing history/i)).toBeInTheDocument();
   });
 
   it("bootstraps an existing signed-in onboarding session without creating another Supabase user", async () => {
@@ -162,7 +162,6 @@ describe("auth pages", () => {
     await userEvent.type(screen.getByLabelText("First location name"), "Bank Street");
     await userEvent.type(screen.getByLabelText("First location address"), "100 Bank St, Ottawa, ON");
     await userEvent.click(screen.getByRole("button", { name: "Continue" }));
-    await userEvent.click(screen.getByRole("button", { name: "Skip CSV and finish" }));
 
     await waitFor(() =>
       expect(mockBootstrapFirstOwner).toHaveBeenCalledWith("existing-token", {
@@ -172,7 +171,7 @@ describe("auth pages", () => {
       })
     );
     expect(signUp).not.toHaveBeenCalled();
-    expect(push).not.toHaveBeenCalled();
+    expect(await screen.findByText(/upload dispensing history/i)).toBeInTheDocument();
   });
 
   it("shows a success confirmation after requesting a password reset", async () => {
