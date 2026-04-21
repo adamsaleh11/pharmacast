@@ -3,14 +3,17 @@ import {
   dashboardStats,
   filterAndSortRows,
   mergeDrugRows,
+  normalizeForecastResult,
+  normalizeForecastSummary,
   parseStockInput,
   resolveGenerationTarget,
   stockResponsesToMap,
   validateStockInput
 } from "./model";
-import type { DrugRow, ForecastSummaryDto } from "@/types/forecast-dashboard";
+import type { DrugRow } from "@/types/forecast-dashboard";
+import type { ForecastRowForecast } from "./model";
 
-const forecast = (overrides: Partial<ForecastSummaryDto>): ForecastSummaryDto => ({
+const forecast = (overrides: Partial<ForecastRowForecast>): ForecastRowForecast => ({
   din: "00012345",
   drug_name: "ATORVASTATIN",
   strength: "20 MG",
@@ -22,6 +25,11 @@ const forecast = (overrides: Partial<ForecastSummaryDto>): ForecastSummaryDto =>
   current_stock: null,
   stock_entered: false,
   threshold: null,
+  prophet_lower: 10,
+  prophet_upper: 14,
+  avg_daily_demand: 1.7,
+  reorder_point: 8,
+  data_points_used: 26,
   ...overrides
 });
 
@@ -101,5 +109,59 @@ describe("forecast dashboard model", () => {
       "none",
       "missing"
     ]);
+  });
+
+  it("normalizes forecast list rows without prophet interval fields", () => {
+    expect(
+      normalizeForecastSummary({
+        din: "00012345",
+        predicted_quantity: 12,
+        confidence: "HIGH",
+        days_of_supply: 2.4,
+        reorder_status: "RED",
+        generated_at: "2026-04-20T12:00:00Z",
+        data_points_used: 26
+      })
+    ).toMatchObject({
+      din: "00012345",
+      predicted_quantity: 12,
+      reorder_status: "RED"
+    });
+
+    expect(
+      normalizeForecastSummary({
+        din: "00012345",
+        drug_name: "ATORVASTATIN",
+        strength: "20 MG",
+        predicted_quantity: 12,
+        confidence: "HIGH",
+        days_of_supply: 2.4,
+        reorder_status: "RED",
+        generated_at: "2026-04-20T12:00:00Z",
+        data_points_used: 26,
+        current_stock: null,
+        stock_entered: false
+      })
+    ).toMatchObject({
+      din: "00012345",
+      drug_name: "ATORVASTATIN",
+      predicted_quantity: 12
+    });
+
+    expect(() =>
+      normalizeForecastResult({
+        din: "00012345",
+        location_id: "location-1",
+        horizon_days: 14,
+        predicted_quantity: 12,
+        confidence: "HIGH",
+        days_of_supply: 2.4,
+        avg_daily_demand: 1.7,
+        reorder_status: "RED",
+        reorder_point: 8,
+        generated_at: "2026-04-20T12:00:00Z",
+        data_points_used: 26
+      })
+    ).toThrow(/prophet_lower/);
   });
 });

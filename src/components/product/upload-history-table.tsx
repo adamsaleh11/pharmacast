@@ -4,9 +4,14 @@ import { useEffect, useState } from "react";
 import { listUploads } from "@/lib/api/upload";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getBackendAccessToken } from "@/lib/supabase/session";
-import type { UploadResponse, ValidationSummary } from "@/types/upload";
+import type { UploadResponse } from "@/types/upload";
 import { Loader2, AlertCircle, CheckCircle2, Clock, FileText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import {
+  formatBacktestPercent,
+  getBacktestDisplay,
+  getUploadValidationSummary
+} from "@/lib/upload-summary";
 
 interface UploadHistoryTableProps {
   locationId: string | null;
@@ -92,14 +97,9 @@ export function UploadHistoryTable({ locationId }: UploadHistoryTableProps) {
         </thead>
         <tbody className="divide-y divide-slate-100">
           {uploads.map((upload) => {
-            let summary: ValidationSummary | null = null;
-            if (upload.validationSummary) {
-              try {
-                summary = JSON.parse(upload.validationSummary);
-              } catch {
-                // Ignore parse errors
-              }
-            }
+            const summary = getUploadValidationSummary(upload);
+            const backtest = summary?.backtest ?? null;
+            const backtestDisplay = getBacktestDisplay(backtest);
 
             return (
               <tr key={upload.uploadId} className="hover:bg-slate-50/50 transition-colors">
@@ -115,15 +115,30 @@ export function UploadHistoryTable({ locationId }: UploadHistoryTableProps) {
                 </td>
                 <td className="px-4 py-3">
                   {summary ? (
-                    <div className="flex gap-3 text-xs">
-                      <span>
-                        <span className="text-slate-400">Rows:</span>{" "}
-                        <span className="font-medium text-slate-700">{summary.total_rows}</span>
-                      </span>
-                      <span>
-                        <span className="text-slate-400">Drugs:</span>{" "}
-                        <span className="font-medium text-slate-700">{summary.unique_dins}</span>
-                      </span>
+                    <div className="space-y-2 text-xs">
+                      <div className="flex flex-wrap gap-3">
+                        <span>
+                          <span className="text-slate-400">Rows:</span>{" "}
+                          <span className="font-medium text-slate-700">{summary.total_rows}</span>
+                        </span>
+                        <span>
+                          <span className="text-slate-400">Drugs:</span>{" "}
+                          <span className="font-medium text-slate-700">{summary.unique_dins}</span>
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant={backtestDisplay.tone} className="gap-1">
+                          {backtestDisplay.badgeLabel}
+                        </Badge>
+                        {backtest ? (
+                          <span className="text-slate-500">
+                            WAPE {formatBacktestPercent(backtest.wape)} · Coverage{" "}
+                            {formatBacktestPercent(backtest.interval_coverage)}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">{backtestDisplay.description}</span>
+                        )}
+                      </div>
                     </div>
                   ) : (
                     <span className="text-xs text-slate-400">—</span>

@@ -1,11 +1,12 @@
 import { ApiError, createApiClient } from "@/lib/api/client";
 import { getPublicEnv } from "@/lib/env";
+import { normalizeForecastResult, normalizeForecastSummary } from "@/lib/forecast-dashboard/model";
 import type {
   CurrentStockResponse,
   DrugListResponse,
   ForecastBatchEvent,
+  ForecastListResponse,
   ForecastResult,
-  ForecastSummaryDto,
   ForecastThresholdDto
 } from "@/types/forecast-dashboard";
 
@@ -15,11 +16,28 @@ export function listForecasts(
   locationId: string,
   horizonDays: number,
   accessToken: string
-): Promise<ForecastSummaryDto[]> {
-  return apiClient.get<ForecastSummaryDto[]>(
+): Promise<ForecastListResponse> {
+  return apiClient.get<unknown>(
     `/locations/${locationId}/forecasts?horizonDays=${horizonDays}`,
     { accessToken }
-  );
+  ).then((response) => {
+    if (!Array.isArray(response)) {
+      throw new Error("Forecast response must be an array.");
+    }
+
+    const warnings: string[] = [];
+    const forecasts = response.flatMap((item, index) => {
+      try {
+        return [normalizeForecastSummary(item, `Forecast row ${index + 1}`)];
+      } catch (error) {
+        const message = error instanceof Error ? error.message : `Forecast row ${index + 1} is invalid.`;
+        warnings.push(message);
+        return [];
+      }
+    });
+
+    return { forecasts, warnings };
+  });
 }
 
 export function listLocationDrugs(locationId: string, accessToken: string): Promise<DrugListResponse> {
@@ -45,11 +63,11 @@ export function generateForecast(
   horizonDays: number,
   accessToken: string
 ): Promise<ForecastResult> {
-  return apiClient.post<ForecastResult>(
+  return apiClient.post<unknown>(
     `/locations/${locationId}/forecasts/generate`,
     { din, horizon_days: horizonDays },
     { accessToken }
-  );
+  ).then((response) => normalizeForecastResult(response, "Forecast generation response"));
 }
 
 export type StreamBatchForecastOptions = {

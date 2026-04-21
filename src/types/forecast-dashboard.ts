@@ -11,14 +11,19 @@ export type ForecastSummaryDto = {
   din: string;
   drug_name: string | null;
   strength: string | null;
-  predicted_quantity: number | null;
-  confidence: ForecastConfidence | string | null;
-  days_of_supply: number | null;
-  reorder_status: ReorderStatus | string | null;
-  generated_at: string | null;
+  predicted_quantity: number;
+  confidence: ForecastConfidence | string;
+  days_of_supply: number;
+  reorder_status: ReorderStatus | string;
+  generated_at: string;
   current_stock: number | null;
   stock_entered: boolean;
   threshold?: ForecastThresholdDto | null;
+};
+
+export type ForecastListResponse = {
+  forecasts: ForecastSummaryDto[];
+  warnings: string[];
 };
 
 export type CurrentStockResponse = {
@@ -32,15 +37,15 @@ export type ForecastResult = {
   location_id: string;
   horizon_days: number;
   predicted_quantity: number;
-  prophet_lower?: number;
-  prophet_upper?: number;
+  prophet_lower: number;
+  prophet_upper: number;
   confidence: ForecastConfidence | string;
   days_of_supply: number;
-  avg_daily_demand?: number;
+  avg_daily_demand: number;
   reorder_status: ReorderStatus | string;
-  reorder_point?: number;
+  reorder_point: number;
   generated_at: string;
-  data_points_used?: number;
+  data_points_used: number;
 };
 
 export type ForecastBatchResultEvent = {
@@ -82,7 +87,7 @@ export type DrugRow = {
   drugStatus: string | null;
   currentStock: number | null;
   stockUpdatedAt: string | null;
-  forecast: ForecastSummaryDto | null;
+  forecast: ForecastSummaryDto & Partial<Pick<ForecastResult, "prophet_lower" | "prophet_upper" | "avg_daily_demand" | "reorder_point" | "data_points_used">> | null;
 };
 
 export type BulkMode = "all" | "selected";

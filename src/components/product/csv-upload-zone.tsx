@@ -1,10 +1,27 @@
 "use client";
 
 import { useCallback, useState, useEffect, useRef } from "react";
-import { FileUp, Loader2, AlertCircle, CheckCircle2, Info } from "lucide-react";
+import {
+  FileUp,
+  Loader2,
+  AlertCircle,
+  CheckCircle2,
+  Info,
+  ShieldCheck,
+  TriangleAlert,
+  Clock3
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useCsvUpload } from "@/hooks/use-csv-upload";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import {
+  formatBacktestBoolean,
+  formatBacktestDateTime,
+  formatBacktestInteger,
+  formatBacktestPercent,
+  getBacktestDisplay
+} from "@/lib/upload-summary";
 
 interface CsvUploadZoneProps {
   locationId: string | null;
@@ -27,14 +44,14 @@ export function CsvUploadZone({ locationId, onSuccess }: CsvUploadZoneProps) {
 
   useEffect(() => {
     const callback = onSuccessRef.current;
-    if (state === "success" && summary && callback && !hasRedirectedRef.current) {
+    if (state === "success" && callback && !hasRedirectedRef.current) {
       hasRedirectedRef.current = true;
       const timer = setTimeout(() => {
         callback();
       }, 1500);
       return () => clearTimeout(timer);
     }
-  }, [state, summary]);
+  }, [state]);
 
   const validateAndUpload = useCallback(
     (file: File) => {
@@ -162,6 +179,27 @@ export function CsvUploadZone({ locationId, onSuccess }: CsvUploadZoneProps) {
   }
 
   if (state === "success" && summary) {
+    const backtest = summary.backtest ?? null;
+    const backtestDisplay = getBacktestDisplay(backtest);
+    const backtestTone =
+      backtestDisplay.tone === "success"
+        ? "border-green-200 bg-green-50 text-green-900"
+        : backtestDisplay.tone === "warning"
+          ? "border-amber-200 bg-amber-50 text-amber-900"
+          : backtestDisplay.tone === "danger"
+            ? "border-red-200 bg-red-50 text-red-900"
+            : "border-slate-200 bg-slate-50 text-slate-900";
+    const backtestIcon =
+      backtestDisplay.tone === "success" ? (
+        <ShieldCheck className="h-5 w-5 text-green-600" aria-hidden="true" />
+      ) : backtestDisplay.tone === "warning" ? (
+        <TriangleAlert className="h-5 w-5 text-amber-600" aria-hidden="true" />
+      ) : backtestDisplay.tone === "danger" ? (
+        <AlertCircle className="h-5 w-5 text-red-600" aria-hidden="true" />
+      ) : (
+        <Clock3 className="h-5 w-5 text-slate-500" aria-hidden="true" />
+      );
+
     return (
       <div className="rounded-lg border border-teal-200 bg-teal-50 p-6">
         <div className="flex items-start gap-3">
@@ -194,6 +232,84 @@ export function CsvUploadZone({ locationId, onSuccess }: CsvUploadZoneProps) {
                 </ul>
               </div>
             )}
+            <div className={cn("mt-4 rounded-lg border p-4", backtestTone)}>
+              <div className="flex items-start gap-3">
+                {backtestIcon}
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant={backtestDisplay.tone}>{backtestDisplay.badgeLabel}</Badge>
+                    <h4 className="text-sm font-semibold">{backtestDisplay.title}</h4>
+                  </div>
+                  <p className="mt-1 text-sm leading-5 opacity-90">{backtestDisplay.description}</p>
+
+                  {backtest ? (
+                    <dl className="mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-3">
+                      <div className="rounded-md bg-white/70 p-3">
+                        <dt className="text-slate-500">WAPE</dt>
+                        <dd className="mt-1 text-sm font-semibold">{formatBacktestPercent(backtest.wape)}</dd>
+                      </div>
+                      <div className="rounded-md bg-white/70 p-3">
+                        <dt className="text-slate-500">Interval coverage</dt>
+                        <dd className="mt-1 text-sm font-semibold">
+                          {formatBacktestPercent(backtest.interval_coverage)}
+                        </dd>
+                      </div>
+                      <div className="rounded-md bg-white/70 p-3">
+                        <dt className="text-slate-500">Rows evaluated</dt>
+                        <dd className="mt-1 text-sm font-semibold">
+                          {formatBacktestInteger(backtest.rows_evaluated)}
+                        </dd>
+                      </div>
+                      <div className="rounded-md bg-white/70 p-3">
+                        <dt className="text-slate-500">DINs evaluated</dt>
+                        <dd className="mt-1 text-sm font-semibold">
+                          {formatBacktestInteger(backtest.din_count)}
+                        </dd>
+                      </div>
+                      <div className="rounded-md bg-white/70 p-3">
+                        <dt className="text-slate-500">7-day baseline</dt>
+                        <dd className="mt-1 text-sm font-semibold">{formatBacktestBoolean(backtest.beats_last_7_day_avg)}</dd>
+                      </div>
+                      <div className="rounded-md bg-white/70 p-3">
+                        <dt className="text-slate-500">14-day baseline</dt>
+                        <dd className="mt-1 text-sm font-semibold">{formatBacktestBoolean(backtest.beats_last_14_day_avg)}</dd>
+                      </div>
+                    </dl>
+                  ) : null}
+
+                  {backtest ? (
+                    <p className="mt-3 text-xs opacity-80">
+                      Last checked {formatBacktestDateTime(backtest.generated_at)}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+            <div className="mt-4 flex items-center gap-3">
+              <div className="flex items-center gap-1.5 text-xs text-teal-700">
+                <CheckCircle2 className="h-3 w-3" />
+                Data updated safely. Redirecting to dashboard...
+              </div>
+              {onSuccess && (
+                <Button size="sm" variant="teal" onClick={onSuccess}>
+                  Continue to dashboard
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (state === "success") {
+    return (
+      <div className="rounded-lg border border-teal-200 bg-teal-50 p-6">
+        <div className="flex items-start gap-3">
+          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-teal-600" />
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold text-teal-900">Upload complete</h3>
+            <p className="mt-1 text-sm text-teal-800">CSV data was saved successfully.</p>
             <div className="mt-4 flex items-center gap-3">
               <div className="flex items-center gap-1.5 text-xs text-teal-700">
                 <CheckCircle2 className="h-3 w-3" />

@@ -54,6 +54,8 @@ import {
   mergeForecastSummary,
   mergeDrugRows,
   normalizedReorderStatus,
+  normalizeForecastResult,
+  removeForecastSummary,
   parseStockInput,
   resolveGenerationTarget,
   stockResponsesToMap,
@@ -70,6 +72,7 @@ import type {
   DrugMetadata,
   DrugRow,
   FilterState,
+  ForecastListResponse,
   ForecastResult,
   ForecastSummaryDto,
   ForecastThresholdDto,
@@ -94,6 +97,7 @@ type EditingState = {
   din: string;
   value: string;
   previousQuantity: number | null;
+  previousUpdatedAt: string | null;
 };
 
 type BulkProgress = {
@@ -159,6 +163,7 @@ export default function DashboardPage() {
   const [forecastStockByDin, setForecastStockByDin] = useState<Map<string, number | null>>(new Map());
   const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
   const [selectedDetailDin, setSelectedDetailDin] = useState<string | null>(null);
+  const [forecastLoadWarning, setForecastLoadWarning] = useState<string | null>(null);
   const stockInputRefs = useRef(new Map<string, HTMLInputElement>());
   const tableParentRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -223,8 +228,17 @@ export default function DashboardPage() {
     }
   }, [stockQuery.data]);
 
-  const forecastRows = useMemo(() => forecastsQuery.data ?? [], [forecastsQuery.data]);
+  const forecastRows = useMemo(() => forecastsQuery.data?.forecasts ?? [], [forecastsQuery.data]);
+  const forecastWarnings = useMemo(() => forecastsQuery.data?.warnings ?? [], [forecastsQuery.data]);
   const locationDrugs = useMemo(() => locationDrugsQuery.data?.drugs ?? [], [locationDrugsQuery.data]);
+
+  useEffect(() => {
+    if (forecastWarnings.length > 0) {
+      setForecastLoadWarning(forecastWarnings[0]);
+    } else {
+      setForecastLoadWarning(null);
+    }
+  }, [forecastWarnings]);
 
   const baseDins = useMemo(() => {
     const dins = new Set<string>();
@@ -322,7 +336,7 @@ export default function DashboardPage() {
   });
 
   const saveStock = useCallback(
-    async (din: string, quantity: number, previousQuantity: number | null) => {
+    async (din: string, quantity: number, previousQuantity: number | null, previousUpdatedAt: string | null) => {
       if (!locationId) {
         setTemporaryStockWarning(din, "Choose a location first");
         return false;
@@ -355,7 +369,7 @@ export default function DashboardPage() {
           if (previousQuantity === null) {
             next.delete(din);
           } else {
-            next.set(din, { quantity: previousQuantity, updatedAt: current.get(din)?.updatedAt ?? null });
+            next.set(din, { quantity: previousQuantity, updatedAt: previousUpdatedAt });
           }
           return next;
         });
@@ -382,7 +396,8 @@ export default function DashboardPage() {
       setEditingStock({
         din,
         value: isStockEntered(row) ? String(row.currentStock) : "",
-        previousQuantity: isStockEntered(row) ? row.currentStock : null
+        previousQuantity: isStockEntered(row) ? row.currentStock : null,
+        previousUpdatedAt: row.stockUpdatedAt
       });
       window.setTimeout(() => {
         const input = stockInputRefs.current.get(din);
@@ -418,7 +433,7 @@ export default function DashboardPage() {
       }
 
       setEditingStock(null);
-      const saved = await saveStock(currentDin, quantity, editingStock.previousQuantity);
+      const saved = await saveStock(currentDin, quantity, editingStock.previousQuantity, editingStock.previousUpdatedAt);
 
       if (moveToNext && saved && nextDin) {
         startEditingStock(nextDin);
@@ -435,6 +450,12 @@ export default function DashboardPage() {
       }
 
       setGeneratingDins((current) => new Set(current).add(row.din));
+      clearForecastResult(queryClient, locationId, horizonDays, row.din);
+      setForecastStockByDin((current) => {
+        const next = new Map(current);
+        next.delete(row.din);
+        return next;
+      });
       setRowErrors((current) => {
         const next = new Map(current);
         next.delete(row.din);
@@ -444,10 +465,11 @@ export default function DashboardPage() {
       try {
         const accessToken = await getDashboardAccessToken("dashboard-generate-row");
         const result = await generateForecast(locationId, row.din, horizonDays, accessToken);
-        mergeForecastResult(queryClient, locationId, horizonDays, result, row);
+        upsertForecastResult(queryClient, locationId, horizonDays, result, row);
         setForecastStockByDin((current) => new Map(current).set(row.din, row.currentStock));
         setToast({ tone: "success", message: `Forecast generated for ${row.din}.` });
       } catch (error) {
+        clearForecastResult(queryClient, locationId, horizonDays, row.din);
         setRowErrors((current) => new Map(current).set(row.din, forecastErrorMessage(error)));
       } finally {
         setGeneratingDins((current) => {
@@ -497,16 +519,31 @@ export default function DashboardPage() {
           onEvent: (event) => {
             if (isBatchResultEvent(event)) {
               const row = rows.find((candidate) => candidate.din === event.din);
-              mergeForecastResult(queryClient, locationId, horizonDays, event.forecast, row);
+              let succeeded = true;
+              try {
+                upsertForecastResult(queryClient, locationId, horizonDays, event.forecast, row);
+              } catch (error) {
+                succeeded = false;
+                clearForecastResult(queryClient, locationId, horizonDays, event.din);
+                setRowErrors((current) =>
+                  new Map(current).set(event.din, forecastErrorMessage(error instanceof Error ? error : new Error("Invalid forecast response")))
+                );
+              }
               setForecastStockByDin((current) => new Map(current).set(event.din, stockMap.get(event.din)?.quantity ?? null));
               setBulkProgress((current) =>
                 current
-                  ? { ...current, completed: current.completed + 1, succeeded: current.succeeded + 1 }
+                  ? {
+                      ...current,
+                      completed: current.completed + 1,
+                      succeeded: current.succeeded + (succeeded ? 1 : 0),
+                      failed: current.failed + (succeeded ? 0 : 1)
+                    }
                   : current
               );
             }
 
             if (isBatchErrorEvent(event)) {
+              clearForecastResult(queryClient, locationId, horizonDays, event.din);
               setRowErrors((current) => new Map(current).set(event.din, insufficientDataMessage(event.error)));
               setBulkProgress((current) =>
                 current ? { ...current, completed: current.completed + 1, failed: current.failed + 1 } : current
@@ -638,6 +675,12 @@ export default function DashboardPage() {
 
       <Card>
         <CardContent className="space-y-4 p-4">
+          {forecastLoadWarning ? (
+            <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              <AlertTriangle className="mt-0.5 h-4 w-4" aria-hidden="true" />
+              <span>{forecastLoadWarning}</span>
+            </div>
+          ) : null}
           <DashboardToolbar
             horizonDays={horizonDays}
             setHorizonDays={setHorizonDays}
@@ -776,7 +819,10 @@ export default function DashboardPage() {
         <DrugDetailPanel
           row={selectedDetailRow}
           horizonDays={horizonDays}
-          stale={forecastStockByDin.get(selectedDetailRow.din) !== selectedDetailRow.currentStock}
+          stale={Boolean(
+            selectedDetailRow.forecast && forecastStockByDin.get(selectedDetailRow.din) !== selectedDetailRow.currentStock
+          )}
+          forecastError={rowErrors.get(selectedDetailRow.din) ?? null}
           onClose={() => setSelectedDetailDin(null)}
         />
       ) : null}
@@ -1061,25 +1107,32 @@ function ForecastTableRow({
             }}
           />
         ) : (
-          <button
-            type="button"
-            disabled={locked}
-            className={cn(
-              "group inline-flex min-h-8 items-center gap-1 rounded-md px-1 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60",
-              hasStock ? "text-slate-900" : "text-amber-700"
-            )}
-            onClick={() => startEditingStock(row.din)}
-          >
-            <span>{hasStock ? `${row.currentStock} units` : "Enter qty"}</span>
-            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : null}
-            {saved ? <Check className="h-3.5 w-3.5 text-green-600" aria-hidden="true" /> : null}
-            {!saved && !saving ? (
-              <Edit3
-                className={cn("h-3.5 w-3.5", hasStock ? "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" : "opacity-100")}
-                aria-hidden="true"
-              />
+          <div className="space-y-1">
+            <button
+              type="button"
+              disabled={locked}
+              className={cn(
+                "group inline-flex min-h-8 items-center gap-1 rounded-md px-1 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60",
+                hasStock ? "text-slate-900" : "text-amber-700"
+              )}
+              onClick={() => startEditingStock(row.din)}
+            >
+              <span>{hasStock ? `${row.currentStock} units` : "Enter qty"}</span>
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : null}
+              {saved ? <Check className="h-3.5 w-3.5 text-green-600" aria-hidden="true" /> : null}
+              {!saved && !saving ? (
+                <Edit3
+                  className={cn("h-3.5 w-3.5", hasStock ? "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" : "opacity-100")}
+                  aria-hidden="true"
+                />
+              ) : null}
+            </button>
+            {hasStock && row.stockUpdatedAt ? (
+              <div className="px-1 text-[11px] text-muted-foreground" title={row.stockUpdatedAt}>
+                Updated {relativeTime(row.stockUpdatedAt)}
+              </div>
             ) : null}
-          </button>
+          </div>
         )}
         {warning ? <div className="mt-1 text-xs font-medium text-red-600">{warning}</div> : null}
       </td>
@@ -1101,7 +1154,7 @@ function ForecastTableRow({
       </td>
       <td className="px-4 py-4">
         <div className="space-y-1">
-          <RowStatusBadge row={row} horizonDays={horizonDays} discontinued={discontinued} />
+          <RowStatusBadge row={row} horizonDays={horizonDays} discontinued={discontinued} rowError={rowError} />
           {stale ? <Badge variant="warning">Stock changed</Badge> : null}
         </div>
       </td>
@@ -1156,12 +1209,22 @@ function DaysOfSupply({ row }: { row: DrugRow }) {
 function RowStatusBadge({
   row,
   horizonDays,
-  discontinued
+  discontinued,
+  rowError
 }: {
   row: DrugRow;
   horizonDays: number;
   discontinued: boolean;
+  rowError: string | null;
 }) {
+  if (rowError) {
+    return (
+      <Badge variant="danger" title={rowError}>
+        Forecast error
+      </Badge>
+    );
+  }
+
   if (discontinued) {
     return <StatusBadge value="cancelled" />;
   }
@@ -1252,11 +1315,13 @@ function DrugDetailPanel({
   row,
   horizonDays,
   stale,
+  forecastError,
   onClose
 }: {
   row: DrugRow;
   horizonDays: number;
   stale: boolean;
+  forecastError: string | null;
   onClose: () => void;
 }) {
   return (
@@ -1273,13 +1338,43 @@ function DrugDetailPanel({
       <dl className="mt-6 grid grid-cols-2 gap-4 text-sm">
         <Detail label="Therapeutic class" value={row.therapeuticClass ?? "Unknown"} />
         <Detail label="Drug status" value={row.drugStatus ?? "Unknown"} />
-        <Detail label="Current stock" value={isStockEntered(row) ? `${row.currentStock} units` : "Not entered"} />
+        <Detail
+          label="Current stock"
+          value={
+            isStockEntered(row)
+              ? row.stockUpdatedAt
+                ? `${row.currentStock} units, updated ${relativeTime(row.stockUpdatedAt)}`
+                : `${row.currentStock} units`
+              : "Not entered"
+          }
+        />
         <Detail label="Stock updated" value={row.stockUpdatedAt ? relativeTime(row.stockUpdatedAt) : "—"} />
         <Detail label="Forecast horizon" value={`${horizonDays} days`} />
-        <Detail label="Forecast demand" value={row.forecast?.predicted_quantity ? `${row.forecast.predicted_quantity} units` : "Not generated"} />
-        <Detail label="Days supply" value={row.forecast?.days_of_supply ? `${row.forecast.days_of_supply.toFixed(1)} days` : "—"} />
+        <Detail
+          label="Forecast demand"
+          value={row.forecast ? `${row.forecast.predicted_quantity} units / ${horizonDays} days` : "Not generated"}
+        />
+        <Detail label="Days supply" value={row.forecast ? `${row.forecast.days_of_supply.toFixed(1)} days` : "—"} />
         <Detail label="Confidence" value={row.forecast?.confidence ?? "—"} />
+        <Detail
+          label="Avg daily demand"
+          value={typeof row.forecast?.avg_daily_demand === "number" ? row.forecast.avg_daily_demand.toFixed(2) : "—"}
+        />
+        <Detail
+          label="Reorder point"
+          value={typeof row.forecast?.reorder_point === "number" ? `${row.forecast.reorder_point} units` : "—"}
+        />
+        <Detail label="Prophet lower" value={row.forecast?.prophet_lower ?? "—"} />
+        <Detail label="Prophet upper" value={row.forecast?.prophet_upper ?? "—"} />
+        <Detail label="Data points used" value={row.forecast ? String(row.forecast.data_points_used) : "—"} />
+        <Detail label="Last generated" value={row.forecast ? relativeTime(row.forecast.generated_at) : "—"} />
       </dl>
+      {forecastError ? (
+        <div className="mt-5 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+          <AlertCircle className="mt-0.5 h-4 w-4" aria-hidden="true" />
+          {forecastError}
+        </div>
+      ) : null}
       {stale ? (
         <div className="mt-5 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
           <Info className="mt-0.5 h-4 w-4" aria-hidden="true" />
@@ -1290,11 +1385,11 @@ function DrugDetailPanel({
   );
 }
 
-function Detail({ label, value }: { label: string; value: string | number }) {
+function Detail({ label, value }: { label: string; value: string | number | null | undefined }) {
   return (
     <div>
       <dt className="text-xs uppercase text-muted-foreground">{label}</dt>
-      <dd className="mt-1 font-medium text-slate-900">{value}</dd>
+      <dd className="mt-1 font-medium text-slate-900">{value ?? "—"}</dd>
     </div>
   );
 }
@@ -1319,7 +1414,7 @@ function Toast({ toast, onClose }: { toast: NonNullable<ToastState>; onClose: ()
   );
 }
 
-function mergeForecastResult(
+function upsertForecastResult(
   queryClient: ReturnType<typeof useQueryClient>,
   locationId: string,
   horizonDays: number,
@@ -1327,16 +1422,39 @@ function mergeForecastResult(
   row?: DrugRow | null
 ) {
   const summary = {
-    ...forecastResultToSummary(result),
-    drug_name: row?.drugName ?? null,
-    strength: row?.strength ?? null,
-    current_stock: row?.currentStock ?? null,
-    stock_entered: row ? isStockEntered(row) : false,
+    ...forecastResultToSummary(normalizeForecastResult(result, "Forecast generation response"), row),
     threshold: row?.forecast?.threshold ?? null
   };
-  queryClient.setQueryData<ForecastSummaryDto[]>(forecastQueryKey(locationId, horizonDays), (current) =>
-    mergeForecastSummary(current, summary)
-  );
+  queryClient.setQueryData<ForecastListResponse>(forecastQueryKey(locationId, horizonDays), (current) => {
+    const next = toForecastListResponse(current);
+    return {
+      ...next,
+      forecasts: mergeForecastSummary(next.forecasts, summary)
+    };
+  });
+}
+
+function clearForecastResult(
+  queryClient: ReturnType<typeof useQueryClient>,
+  locationId: string,
+  horizonDays: number,
+  din: string
+) {
+  queryClient.setQueryData<ForecastListResponse>(forecastQueryKey(locationId, horizonDays), (current) => {
+    const next = toForecastListResponse(current);
+    return {
+      ...next,
+      forecasts: removeForecastSummary(next.forecasts, din)
+    };
+  });
+}
+
+function toForecastListResponse(value: ForecastListResponse | ForecastSummaryDto[] | undefined): ForecastListResponse {
+  if (Array.isArray(value)) {
+    return { forecasts: value, warnings: [] };
+  }
+
+  return value ?? { forecasts: [], warnings: [] };
 }
 
 function nextVisibleDin(currentDin: string, rows: DrugRow[]) {
@@ -1364,6 +1482,12 @@ function forecastErrorMessage(error: unknown) {
   }
   if (error instanceof ApiError && error.code === "NO_STOCK_ENTERED") {
     return "No stock quantities entered yet";
+  }
+  if (
+    error instanceof Error &&
+    (error.message.includes("required field") || error.message.includes("must be an object"))
+  ) {
+    return error.message;
   }
   return "Not enough data";
 }

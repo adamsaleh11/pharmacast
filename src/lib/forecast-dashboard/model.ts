@@ -14,6 +14,114 @@ import type {
 
 export const STOCK_MAX_QUANTITY = 999_999;
 
+export type ForecastRowForecast = ForecastSummaryDto & {
+  prophet_lower?: number | null;
+  prophet_upper?: number | null;
+  avg_daily_demand?: number | null;
+  reorder_point?: number | null;
+  data_points_used?: number;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readStringField(value: Record<string, unknown>, field: string, context: string) {
+  const candidate = value[field];
+  if (typeof candidate !== "string" || candidate.trim().length === 0) {
+    throw new Error(`${context} is missing required field "${field}".`);
+  }
+  return candidate;
+}
+
+function readNullableStringField(value: Record<string, unknown>, field: string) {
+  const candidate = value[field];
+  return typeof candidate === "string" && candidate.trim().length > 0 ? candidate : null;
+}
+
+function readNumberField(value: Record<string, unknown>, field: string, context: string) {
+  const candidate = value[field];
+  if (typeof candidate !== "number" || !Number.isFinite(candidate)) {
+    throw new Error(`${context} is missing required field "${field}".`);
+  }
+  return candidate;
+}
+
+function readNullableNumberField(value: Record<string, unknown>, field: string) {
+  const candidate = value[field];
+  return typeof candidate === "number" && Number.isFinite(candidate) ? candidate : null;
+}
+
+function readBooleanField(value: Record<string, unknown>, field: string) {
+  const candidate = value[field];
+  return typeof candidate === "boolean" ? candidate : false;
+}
+
+function readThresholdField(value: Record<string, unknown>) {
+  const candidate = value.threshold;
+  if (!isRecord(candidate)) {
+    return null;
+  }
+
+  const leadTimeDays = candidate.lead_time_days;
+  const safetyMultiplier = candidate.safety_multiplier;
+
+  if (typeof leadTimeDays !== "number" || !Number.isFinite(leadTimeDays)) {
+    return null;
+  }
+
+  if (typeof safetyMultiplier !== "number" || !Number.isFinite(safetyMultiplier)) {
+    return null;
+  }
+
+  return {
+    lead_time_days: leadTimeDays,
+    safety_multiplier: safetyMultiplier
+  };
+}
+
+export function normalizeForecastSummary(value: unknown, context = "Forecast response"): ForecastSummaryDto {
+  if (!isRecord(value)) {
+    throw new Error(`${context} must be an object.`);
+  }
+
+  return {
+    din: readStringField(value, "din", context),
+    drug_name: readNullableStringField(value, "drug_name"),
+    strength: readNullableStringField(value, "strength"),
+    predicted_quantity: readNumberField(value, "predicted_quantity", context),
+    confidence: readStringField(value, "confidence", context),
+    days_of_supply: readNumberField(value, "days_of_supply", context),
+    reorder_status: readStringField(value, "reorder_status", context),
+    generated_at: readStringField(value, "generated_at", context),
+    current_stock: readNullableNumberField(value, "current_stock"),
+    stock_entered: readBooleanField(value, "stock_entered"),
+    threshold: readThresholdField(value)
+  };
+}
+
+export function normalizeForecastResult(value: unknown, context = "Forecast response"): ForecastResult {
+  if (!isRecord(value)) {
+    throw new Error(`${context} must be an object.`);
+  }
+
+  return {
+    din: readStringField(value, "din", context),
+    location_id: readStringField(value, "location_id", context),
+    horizon_days: readNumberField(value, "horizon_days", context),
+    predicted_quantity: readNumberField(value, "predicted_quantity", context),
+    prophet_lower: readNumberField(value, "prophet_lower", context),
+    prophet_upper: readNumberField(value, "prophet_upper", context),
+    confidence: readStringField(value, "confidence", context),
+    days_of_supply: readNumberField(value, "days_of_supply", context),
+    avg_daily_demand: readNumberField(value, "avg_daily_demand", context),
+    reorder_status: readStringField(value, "reorder_status", context),
+    reorder_point: readNumberField(value, "reorder_point", context),
+    generated_at: readStringField(value, "generated_at", context),
+    data_points_used: readNumberField(value, "data_points_used", context)
+  };
+}
+
 export function stockResponsesToMap(stockRows: CurrentStockResponse[]): Map<string, StockEntry> {
   return new Map(stockRows.map((stock) => [stock.din, { quantity: stock.quantity, updatedAt: stock.updated_at }]));
 }
@@ -46,26 +154,34 @@ export function parseStockInput(value: string): number | null {
   return trimmed ? Number(trimmed) : null;
 }
 
-export function forecastResultToSummary(result: ForecastResult): ForecastSummaryDto {
+export function forecastResultToSummary(
+  result: ForecastResult,
+  row?: Pick<DrugRow, "drugName" | "strength" | "currentStock"> | null
+): ForecastRowForecast {
   return {
     din: result.din,
-    drug_name: null,
-    strength: null,
+    drug_name: row?.drugName ?? null,
+    strength: row?.strength ?? null,
     predicted_quantity: result.predicted_quantity,
     confidence: result.confidence,
     days_of_supply: result.days_of_supply,
     reorder_status: result.reorder_status,
     generated_at: result.generated_at,
-    current_stock: null,
-    stock_entered: false,
-    threshold: null
+    current_stock: row?.currentStock ?? null,
+    stock_entered: row ? isStockEntered(row) : false,
+    threshold: null,
+    prophet_lower: result.prophet_lower,
+    prophet_upper: result.prophet_upper,
+    avg_daily_demand: result.avg_daily_demand,
+    reorder_point: result.reorder_point,
+    data_points_used: result.data_points_used
   };
 }
 
 export function mergeForecastSummary(
-  summaries: ForecastSummaryDto[] | undefined,
-  nextSummary: ForecastSummaryDto
-): ForecastSummaryDto[] {
+  summaries: ForecastRowForecast[] | undefined,
+  nextSummary: ForecastRowForecast
+): ForecastRowForecast[] {
   const existing = summaries ?? [];
   const index = existing.findIndex((summary) => summary.din === nextSummary.din);
 
@@ -73,21 +189,15 @@ export function mergeForecastSummary(
     return [...existing, nextSummary];
   }
 
-  return existing.map((summary, currentIndex) =>
-    currentIndex === index
-      ? {
-          ...summary,
-          ...nextSummary,
-          drug_name: nextSummary.drug_name ?? summary.drug_name,
-          strength: nextSummary.strength ?? summary.strength,
-          threshold: nextSummary.threshold ?? summary.threshold
-        }
-      : summary
-  );
+  return existing.map((summary, currentIndex) => (currentIndex === index ? nextSummary : summary));
+}
+
+export function removeForecastSummary(summaries: ForecastRowForecast[] | undefined, din: string): ForecastRowForecast[] {
+  return (summaries ?? []).filter((summary) => summary.din !== din);
 }
 
 export function mergeDrugRows(
-  forecasts: ForecastSummaryDto[],
+  forecasts: ForecastRowForecast[],
   stockMap: Map<string, StockEntry>,
   metadataByDin: Map<string, DrugMetadata | null> = new Map(),
   locationDrugs: { din: string; drugName: string | null; strength: string | null }[] = []

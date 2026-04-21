@@ -3,6 +3,7 @@ import { uploadCsv, getUploadDetail } from "@/lib/api/upload";
 import { getBackendAccessToken } from "@/lib/supabase/session";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { ValidationSummary, CsvUploadStatus } from "@/types/upload";
+import { parseValidationSummary } from "@/lib/upload-summary";
 
 export type UploadState = "idle" | "uploading" | "processing" | "success" | "error";
 
@@ -13,26 +14,14 @@ export function useCsvUpload(locationId: string | null) {
   const [summary, setSummary] = useState<ValidationSummary | null>(null);
   const [filename, setFilename] = useState<string | null>(null);
 
-  const handleTerminalState = useCallback((status: CsvUploadStatus, summaryStr: string | null) => {
+  const handleTerminalState = useCallback((status: CsvUploadStatus, summaryValue: unknown) => {
     if (status === "SUCCESS") {
       setState("success");
-      if (summaryStr) {
-        try {
-          setSummary(JSON.parse(summaryStr));
-        } catch (e) {
-          console.error("Failed to parse validation summary", e);
-        }
-      }
+      setSummary(parseValidationSummary(summaryValue));
     } else if (status === "ERROR") {
       setState("error");
       setError("The file contains validation errors. Please check the Kroll export guide.");
-      if (summaryStr) {
-        try {
-          setSummary(JSON.parse(summaryStr));
-        } catch (e) {
-          console.error("Failed to parse validation summary", e);
-        }
-      }
+      setSummary(parseValidationSummary(summaryValue));
     }
   }, []);
 
