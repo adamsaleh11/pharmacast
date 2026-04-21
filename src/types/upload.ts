@@ -42,6 +42,8 @@ export type UploadResponse = {
   status: CsvUploadStatus;
   rowCount: number | null;
   drugCount: number | null;
+  backtestModelVersion?: string | null;
+  backtestModelPathCounts?: Record<string, number> | null;
   validationSummary: string | ValidationSummary | null;
   uploadedAt: string;
 };

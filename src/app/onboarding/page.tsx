@@ -77,20 +77,17 @@ export default function OnboardingPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
+    console.log("[Onboarding] Mounting, checking session...");
     const supabase = createSupabaseBrowserClient();
-    if (!supabase) return;
+    if (!supabase) {
+      console.log("[Onboarding] No supabase client");
+      return;
+    }
 
     supabase.auth.getSession().then(async ({ data }) => {
       const session = data.session;
 
       if (!session?.access_token) return;
-
-      const metadata = session?.user?.user_metadata as Partial<SignupBootstrapMetadata> | undefined;
-      if (metadata) {
-        setPharmacyName((current) => current || metadata.organization_name || "");
-        setLocationName((current) => current || metadata.location_name || "");
-        setLocationAddress((current) => current || metadata.location_address || "");
-      }
 
       try {
         const profile = await getCurrentAuthUser(session.access_token);
@@ -101,6 +98,7 @@ export default function OnboardingPage() {
         if (profileError instanceof ApiError && profileError.code === "USER_PROFILE_NOT_BOOTSTRAPPED") {
           return;
         }
+        console.warn("Onboarding profile check failed:", profileError);
       }
     });
   }, []);
@@ -324,6 +322,7 @@ export default function OnboardingPage() {
               event.preventDefault();
               validateStep(2);
             }}
+            autoComplete="off"
           >
             <label className="block text-sm font-medium" htmlFor="signup-email">
               Email
@@ -377,6 +376,7 @@ export default function OnboardingPage() {
               event.preventDefault();
               validateStep(3);
             }}
+            autoComplete="off"
           >
             <label className="block text-sm font-medium" htmlFor="location-name">
               First location name

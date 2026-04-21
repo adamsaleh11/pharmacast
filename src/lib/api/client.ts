@@ -8,6 +8,7 @@ export type ApiClient = {
   get<TResponse>(path: string, options?: ApiClientOptions): Promise<TResponse>;
   post<TResponse>(path: string, body?: unknown, options?: ApiClientOptions): Promise<TResponse>;
   put<TResponse>(path: string, body?: unknown, options?: ApiClientOptions): Promise<TResponse>;
+  delete<TResponse>(path: string, options?: ApiClientOptions): Promise<TResponse>;
 };
 
 export class ApiError extends Error {
@@ -110,6 +111,10 @@ export function createApiClient(): ApiClient {
       request(path, options, {
         method: "PUT",
         body: body === undefined ? undefined : JSON.stringify(body)
+      }),
+    delete: (path, options = {}) =>
+      request(path, options, {
+        method: "DELETE"
       })
   };
 }

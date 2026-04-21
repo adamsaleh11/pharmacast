@@ -113,7 +113,7 @@ export function formatBacktestPercent(value: number | null | undefined, fraction
     return "—";
   }
 
-  return new Intl.NumberFormat(undefined, {
+  return new Intl.NumberFormat("en-CA", {
     style: "percent",
     minimumFractionDigits: fractionDigits,
     maximumFractionDigits: fractionDigits
@@ -125,7 +125,7 @@ export function formatBacktestInteger(value: number | null | undefined) {
     return "—";
   }
 
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
+  return new Intl.NumberFormat("en-CA", { maximumFractionDigits: 0 }).format(value);
 }
 
 export function formatBacktestDateTime(value: string | null | undefined) {
@@ -138,8 +138,9 @@ export function formatBacktestDateTime(value: string | null | undefined) {
     return "—";
   }
 
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-CA", {
     dateStyle: "medium",
-    timeStyle: "short"
+    timeStyle: "short",
+    timeZone: "America/Toronto"
   }).format(date);
 }

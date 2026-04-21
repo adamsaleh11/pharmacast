@@ -12,6 +12,7 @@ export type ForecastSummaryDto = {
   drug_name: string | null;
   strength: string | null;
   predicted_quantity: number;
+  model_path?: string | null;
   confidence: ForecastConfidence | string;
   days_of_supply: number;
   reorder_status: ReorderStatus | string;
@@ -37,6 +38,7 @@ export type ForecastResult = {
   location_id: string;
   horizon_days: number;
   predicted_quantity: number;
+  model_path?: string | null;
   prophet_lower: number;
   prophet_upper: number;
   confidence: ForecastConfidence | string;

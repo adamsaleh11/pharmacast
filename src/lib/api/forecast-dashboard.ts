@@ -70,6 +70,10 @@ export function generateForecast(
   ).then((response) => normalizeForecastResult(response, "Forecast generation response"));
 }
 
+export function explainForecast(locationId: string, din: string, accessToken: string): Promise<unknown> {
+  return apiClient.post<unknown>(`/locations/${locationId}/forecasts/${din}/explain`, undefined, { accessToken });
+}
+
 export type StreamBatchForecastOptions = {
   locationId: string;
   dins: string[];

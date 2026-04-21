@@ -15,6 +15,7 @@ import type {
 export const STOCK_MAX_QUANTITY = 999_999;
 
 export type ForecastRowForecast = ForecastSummaryDto & {
+  model_path?: string | null;
   prophet_lower?: number | null;
   prophet_upper?: number | null;
   avg_daily_demand?: number | null;
@@ -90,6 +91,7 @@ export function normalizeForecastSummary(value: unknown, context = "Forecast res
     drug_name: readNullableStringField(value, "drug_name"),
     strength: readNullableStringField(value, "strength"),
     predicted_quantity: readNumberField(value, "predicted_quantity", context),
+    model_path: readNullableStringField(value, "model_path"),
     confidence: readStringField(value, "confidence", context),
     days_of_supply: readNumberField(value, "days_of_supply", context),
     reorder_status: readStringField(value, "reorder_status", context),
@@ -110,6 +112,7 @@ export function normalizeForecastResult(value: unknown, context = "Forecast resp
     location_id: readStringField(value, "location_id", context),
     horizon_days: readNumberField(value, "horizon_days", context),
     predicted_quantity: readNumberField(value, "predicted_quantity", context),
+    model_path: readNullableStringField(value, "model_path"),
     prophet_lower: readNumberField(value, "prophet_lower", context),
     prophet_upper: readNumberField(value, "prophet_upper", context),
     confidence: readStringField(value, "confidence", context),
@@ -163,6 +166,7 @@ export function forecastResultToSummary(
     drug_name: row?.drugName ?? null,
     strength: row?.strength ?? null,
     predicted_quantity: result.predicted_quantity,
+    model_path: result.model_path ?? null,
     confidence: result.confidence,
     days_of_supply: result.days_of_supply,
     reorder_status: result.reorder_status,

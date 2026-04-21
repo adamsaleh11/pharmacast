@@ -12,6 +12,7 @@ import {
   getBacktestDisplay,
   getUploadValidationSummary
 } from "@/lib/upload-summary";
+import { formatForecastModelPathCountEntries, getUploadModelMetadata } from "@/lib/forecast-model-metadata";
 
 interface UploadHistoryTableProps {
   locationId: string | null;
@@ -100,14 +101,17 @@ export function UploadHistoryTable({ locationId }: UploadHistoryTableProps) {
             const summary = getUploadValidationSummary(upload);
             const backtest = summary?.backtest ?? null;
             const backtestDisplay = getBacktestDisplay(backtest);
+            const modelMetadata = getUploadModelMetadata(upload);
+            const modelCounts = formatForecastModelPathCountEntries(modelMetadata.backtestModelPathCounts);
 
             return (
               <tr key={upload.uploadId} className="hover:bg-slate-50/50 transition-colors">
                 <td className="px-4 py-3 text-slate-600 whitespace-nowrap">
-                  {new Date(upload.uploadedAt).toLocaleString(undefined, {
+                  {new Intl.DateTimeFormat("en-CA", {
                     dateStyle: "medium",
-                    timeStyle: "short"
-                  })}
+                    timeStyle: "short",
+                    timeZone: "America/Toronto"
+                  }).format(new Date(upload.uploadedAt))}
                 </td>
                 <td className="px-4 py-3 font-medium text-slate-900">{upload.filename}</td>
                 <td className="px-4 py-3">
@@ -139,6 +143,23 @@ export function UploadHistoryTable({ locationId }: UploadHistoryTableProps) {
                           <span className="text-slate-400">{backtestDisplay.description}</span>
                         )}
                       </div>
+                      {modelMetadata.backtestModelVersion ? (
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <Badge variant="muted">Verification model {modelMetadata.backtestModelVersion}</Badge>
+                          {modelCounts.length > 0 ? (
+                            <span className="text-slate-500">Path counts: {modelCounts.join(" · ")}</span>
+                          ) : null}
+                        </div>
+                      ) : modelCounts.length > 0 ? (
+                        <div className="text-xs text-slate-500">Path counts: {modelCounts.join(" · ")}</div>
+                      ) : null}
+                    </div>
+                  ) : modelMetadata.backtestModelVersion || modelCounts.length > 0 ? (
+                    <div className="space-y-2 text-xs">
+                      {modelMetadata.backtestModelVersion ? (
+                        <Badge variant="muted">Verification model {modelMetadata.backtestModelVersion}</Badge>
+                      ) : null}
+                      {modelCounts.length > 0 ? <div className="text-slate-500">Path counts: {modelCounts.join(" · ")}</div> : null}
                     </div>
                   ) : (
                     <span className="text-xs text-slate-400">—</span>

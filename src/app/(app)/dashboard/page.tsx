@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
@@ -12,7 +13,6 @@ import {
   ChevronRight,
   Download,
   Edit3,
-  Info,
   Loader2,
   Package,
   PauseCircle,
@@ -32,6 +32,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { listUploads } from "@/lib/api/upload";
+import { DrugDetailPanel } from "@/components/product/drug-detail-panel";
 import {
   generateForecast,
   listCurrentStock,
@@ -61,8 +62,10 @@ import {
   stockResponsesToMap,
   validateStockInput
 } from "@/lib/forecast-dashboard/model";
+import { setDrugDetailCurrentStock, setDrugDetailForecast } from "@/lib/drug-detail-cache";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getBackendAccessToken } from "@/lib/supabase/session";
+import { formatForecastModelPathLabel } from "@/lib/forecast-model-metadata";
 import { cn } from "@/lib/utils";
 import { useDrugMetadataMap } from "@/hooks/use-drug-metadata";
 import { useAppContext } from "@/providers/app-context";
@@ -139,6 +142,9 @@ function uploadsQueryKey(locationId: string | null | undefined) {
 
 export default function DashboardPage() {
   const queryClient = useQueryClient();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { currentLocation } = useAppContext();
   const locationId = currentLocation?.id ?? null;
   const [horizonDays, setHorizonDays] = useState<(typeof HORIZONS)[number]>(14);
@@ -162,11 +168,11 @@ export default function DashboardPage() {
   const [rowErrors, setRowErrors] = useState<Map<string, string>>(new Map());
   const [forecastStockByDin, setForecastStockByDin] = useState<Map<string, number | null>>(new Map());
   const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
-  const [selectedDetailDin, setSelectedDetailDin] = useState<string | null>(null);
   const [forecastLoadWarning, setForecastLoadWarning] = useState<string | null>(null);
   const stockInputRefs = useRef(new Map<string, HTMLInputElement>());
   const tableParentRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const selectedDetailDin = normalizeDin(searchParams.get("drug")) ?? searchParams.get("drug")?.trim() ?? null;
 
   useEffect(() => {
     const timeout = window.setTimeout(() => setDebouncedSearchQuery(searchQuery), 200);
@@ -269,7 +275,6 @@ export default function DashboardPage() {
     [debouncedSearchQuery, filters, rows, sortKey]
   );
   const tableRows = visibleRows.slice(0, visibleLimit);
-  const selectedDetailRow = selectedDetailDin ? rows.find((row) => row.din === selectedDetailDin) ?? null : null;
 
   useEffect(() => {
     setVisibleLimit(FORECAST_VISIBLE_INCREMENT);
@@ -302,6 +307,28 @@ export default function DashboardPage() {
       abortControllerRef.current?.abort();
     };
   }, []);
+
+  const updateDrugDetailRoute = useCallback(
+    (nextDin: string | null) => {
+      const nextParams = new URLSearchParams(searchParams.toString());
+
+      if (nextDin) {
+        nextParams.set("drug", nextDin);
+      } else {
+        nextParams.delete("drug");
+      }
+
+      const nextQuery = nextParams.toString();
+      const nextUrl = nextQuery ? `${pathname}?${nextQuery}` : pathname;
+
+      if (nextDin) {
+        router.push(nextUrl);
+      } else {
+        router.replace(nextUrl);
+      }
+    },
+    [pathname, router, searchParams]
+  );
 
   const setTemporaryStockWarning = useCallback((din: string, message: string) => {
     setStockWarnings((current) => new Map(current).set(din, message));
@@ -343,11 +370,13 @@ export default function DashboardPage() {
       }
 
       setSavingDins((current) => new Set(current).add(din));
+      const optimisticUpdatedAt = new Date().toISOString();
       setStockMap((current) => {
         const next = new Map(current);
-        next.set(din, { quantity, updatedAt: new Date().toISOString() });
+        next.set(din, { quantity, updatedAt: optimisticUpdatedAt });
         return next;
       });
+      setDrugDetailCurrentStock(queryClient, locationId, din, quantity, optimisticUpdatedAt);
 
       try {
         const saved = await stockMutation.mutateAsync({ din, quantity });
@@ -356,6 +385,7 @@ export default function DashboardPage() {
           next.set(din, { quantity: saved.quantity, updatedAt: saved.updated_at });
           return next;
         });
+        setDrugDetailCurrentStock(queryClient, locationId, din, saved.quantity, saved.updated_at);
         markStockSuccess(din);
         setRowErrors((current) => {
           const next = new Map(current);
@@ -373,6 +403,7 @@ export default function DashboardPage() {
           }
           return next;
         });
+        setDrugDetailCurrentStock(queryClient, locationId, din, previousQuantity, previousUpdatedAt);
         setTemporaryStockWarning(din, stockErrorMessage(error));
         return false;
       } finally {
@@ -383,7 +414,7 @@ export default function DashboardPage() {
         });
       }
     },
-    [locationId, markStockSuccess, setTemporaryStockWarning, stockMutation]
+    [locationId, markStockSuccess, queryClient, setTemporaryStockWarning, stockMutation]
   );
 
   const startEditingStock = useCallback(
@@ -466,6 +497,7 @@ export default function DashboardPage() {
         const accessToken = await getDashboardAccessToken("dashboard-generate-row");
         const result = await generateForecast(locationId, row.din, horizonDays, accessToken);
         upsertForecastResult(queryClient, locationId, horizonDays, result, row);
+        setDrugDetailForecast(queryClient, locationId, result);
         setForecastStockByDin((current) => new Map(current).set(row.din, row.currentStock));
         setToast({ tone: "success", message: `Forecast generated for ${row.din}.` });
       } catch (error) {
@@ -522,6 +554,7 @@ export default function DashboardPage() {
               let succeeded = true;
               try {
                 upsertForecastResult(queryClient, locationId, horizonDays, event.forecast, row);
+                setDrugDetailForecast(queryClient, locationId, event.forecast);
               } catch (error) {
                 succeeded = false;
                 clearForecastResult(queryClient, locationId, horizonDays, event.din);
@@ -787,7 +820,7 @@ export default function DashboardPage() {
                         onExplain={() =>
                           setToast({ tone: "muted", message: "Forecast explanations are not available in this feature yet." })
                         }
-                        onOpenDetail={() => setSelectedDetailDin(row.din)}
+                        onOpenDetail={() => updateDrugDetailRoute(normalizeDin(row.din) ?? row.din)}
                       />
                     );
                   })}
@@ -815,17 +848,29 @@ export default function DashboardPage() {
         />
       ) : null}
 
-      {selectedDetailRow ? (
-        <DrugDetailPanel
-          row={selectedDetailRow}
-          horizonDays={horizonDays}
-          stale={Boolean(
-            selectedDetailRow.forecast && forecastStockByDin.get(selectedDetailRow.din) !== selectedDetailRow.currentStock
-          )}
-          forecastError={rowErrors.get(selectedDetailRow.din) ?? null}
-          onClose={() => setSelectedDetailDin(null)}
-        />
-      ) : null}
+      <DrugDetailPanel
+        key={selectedDetailDin ?? "closed"}
+        open={Boolean(selectedDetailDin)}
+        locationId={locationId}
+        din={selectedDetailDin}
+        horizonDays={horizonDays}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) {
+            updateDrugDetailRoute(null);
+          }
+        }}
+        onStockSaved={(din, quantity, updatedAt) => {
+          setStockMap((current) => {
+            const next = new Map(current);
+            if (quantity === null) {
+              next.delete(din);
+            } else {
+              next.set(din, { quantity, updatedAt });
+            }
+            return next;
+          });
+        }}
+      />
 
       {toast ? <Toast toast={toast} onClose={() => setToast(null)} /> : null}
     </div>
@@ -1155,6 +1200,7 @@ function ForecastTableRow({
       <td className="px-4 py-4">
         <div className="space-y-1">
           <RowStatusBadge row={row} horizonDays={horizonDays} discontinued={discontinued} rowError={rowError} />
+          {row.forecast ? <Badge variant="muted">Model: {formatForecastModelPathLabel(row.forecast.model_path)}</Badge> : null}
           {stale ? <Badge variant="warning">Stock changed</Badge> : null}
         </div>
       </td>
@@ -1307,89 +1353,6 @@ function ConfirmGenerateDialog({
           </Button>
         </div>
       </div>
-    </div>
-  );
-}
-
-function DrugDetailPanel({
-  row,
-  horizonDays,
-  stale,
-  forecastError,
-  onClose
-}: {
-  row: DrugRow;
-  horizonDays: number;
-  stale: boolean;
-  forecastError: string | null;
-  onClose: () => void;
-}) {
-  return (
-    <aside className="fixed inset-y-0 right-0 z-40 w-full max-w-md border-l border-border bg-white p-5 shadow-xl" aria-label="Drug detail panel">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-slate-900">{formatDrugName(row)}</h2>
-          <p className="font-mono text-xs text-muted-foreground">{normalizeDin(row.din) ?? row.din}</p>
-        </div>
-        <button type="button" aria-label="Close drug detail" className="rounded-md p-1 hover:bg-muted" onClick={onClose}>
-          <X className="h-4 w-4" aria-hidden="true" />
-        </button>
-      </div>
-      <dl className="mt-6 grid grid-cols-2 gap-4 text-sm">
-        <Detail label="Therapeutic class" value={row.therapeuticClass ?? "Unknown"} />
-        <Detail label="Drug status" value={row.drugStatus ?? "Unknown"} />
-        <Detail
-          label="Current stock"
-          value={
-            isStockEntered(row)
-              ? row.stockUpdatedAt
-                ? `${row.currentStock} units, updated ${relativeTime(row.stockUpdatedAt)}`
-                : `${row.currentStock} units`
-              : "Not entered"
-          }
-        />
-        <Detail label="Stock updated" value={row.stockUpdatedAt ? relativeTime(row.stockUpdatedAt) : "—"} />
-        <Detail label="Forecast horizon" value={`${horizonDays} days`} />
-        <Detail
-          label="Forecast demand"
-          value={row.forecast ? `${row.forecast.predicted_quantity} units / ${horizonDays} days` : "Not generated"}
-        />
-        <Detail label="Days supply" value={row.forecast ? `${row.forecast.days_of_supply.toFixed(1)} days` : "—"} />
-        <Detail label="Confidence" value={row.forecast?.confidence ?? "—"} />
-        <Detail
-          label="Avg daily demand"
-          value={typeof row.forecast?.avg_daily_demand === "number" ? row.forecast.avg_daily_demand.toFixed(2) : "—"}
-        />
-        <Detail
-          label="Reorder point"
-          value={typeof row.forecast?.reorder_point === "number" ? `${row.forecast.reorder_point} units` : "—"}
-        />
-        <Detail label="Prophet lower" value={row.forecast?.prophet_lower ?? "—"} />
-        <Detail label="Prophet upper" value={row.forecast?.prophet_upper ?? "—"} />
-        <Detail label="Data points used" value={row.forecast ? String(row.forecast.data_points_used) : "—"} />
-        <Detail label="Last generated" value={row.forecast ? relativeTime(row.forecast.generated_at) : "—"} />
-      </dl>
-      {forecastError ? (
-        <div className="mt-5 flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-          <AlertCircle className="mt-0.5 h-4 w-4" aria-hidden="true" />
-          {forecastError}
-        </div>
-      ) : null}
-      {stale ? (
-        <div className="mt-5 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-          <Info className="mt-0.5 h-4 w-4" aria-hidden="true" />
-          Stock changed since this forecast was shown. Regenerate when ready.
-        </div>
-      ) : null}
-    </aside>
-  );
-}
-
-function Detail({ label, value }: { label: string; value: string | number | null | undefined }) {
-  return (
-    <div>
-      <dt className="text-xs uppercase text-muted-foreground">{label}</dt>
-      <dd className="mt-1 font-medium text-slate-900">{value ?? "—"}</dd>
     </div>
   );
 }

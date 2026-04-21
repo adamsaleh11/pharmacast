@@ -140,7 +140,9 @@ function LoginForm() {
             role="link"
             tabIndex={0}
             className="font-medium text-pharma-teal hover:underline cursor-pointer"
-            onClick={() => {
+            onClick={async () => {
+              const supabase = createSupabaseBrowserClient();
+              await supabase?.auth.signOut();
               window.location.replace("/onboarding");
             }}
           >
