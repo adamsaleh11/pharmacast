@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import DashboardPage from "./page";
 import { ApiError } from "@/lib/api/client";
 import { getDrugDetail } from "@/lib/api/drug-detail";
+import { explainForecast } from "@/lib/api/forecast-dashboard";
 
 let currentPathname = "/dashboard";
 let currentSearch = "";
@@ -168,9 +169,20 @@ vi.mock("@/lib/api/forecast-dashboard", () => ({
     reorder_point: 3,
     data_points_used: 18
   }),
-  explainForecast: vi.fn().mockResolvedValue({ explanation: "Forecast demand is stable." }),
+  explainForecast: vi.fn().mockResolvedValue({
+    explanation: "Forecast demand is stable.",
+    generated_at: "2026-04-20T13:00:00Z"
+  }),
+  explanationQueryKey: vi.fn((locationId: string | null | undefined, din: string | null | undefined) => [
+    "explanation",
+    locationId,
+    din
+  ]),
+  EXPLANATION_STALE_TIME_MS: 60 * 60 * 1000,
   streamBatchForecast: vi.fn()
 }));
+
+const mockExplainForecast = vi.mocked(explainForecast);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -227,6 +239,7 @@ describe("Dashboard route", () => {
     await user.click(generateButton);
 
     expect(await screen.findByText("Model: Recent trend fallback")).toBeInTheDocument();
+    expect(await screen.findAllByRole("button", { name: "Explain" })).toHaveLength(2);
   });
 
   it("opens the drug detail panel from the route query", async () => {
@@ -239,6 +252,34 @@ describe("Dashboard route", () => {
     expect(screen.getByText("Model: Prophet")).toBeInTheDocument();
     expect(screen.getByText("Model: XGBoost residual interval")).toBeInTheDocument();
     expect(screen.getByText("Overview")).toBeInTheDocument();
+  });
+
+  it("reuses the explain cache across the dashboard row and side panel", async () => {
+    const user = userEvent.setup();
+    currentSearch = "drug=00012345";
+
+    renderDashboard();
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+
+    await user.click(await screen.findByRole("button", { name: "Explain" }));
+
+    const explanations = await screen.findAllByText("Forecast demand is stable.");
+    expect(explanations).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Collapse" })).toHaveLength(2);
+  });
+
+  it("shows a retryable error state when the explain request fails", async () => {
+    const user = userEvent.setup();
+    currentSearch = "drug=00012345";
+    mockExplainForecast.mockRejectedValueOnce(new ApiError("API request failed with status 503.", 503, "LLM_UNAVAILABLE"));
+
+    renderDashboard();
+
+    await user.click(await screen.findByRole("button", { name: "Explain" }));
+
+    expect(await screen.findAllByText("Explanation unavailable — try again")).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(2);
   });
 
   it("shows a fallback state when the drug detail endpoint returns 404", async () => {

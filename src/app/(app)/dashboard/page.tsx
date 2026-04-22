@@ -25,6 +25,7 @@ import {
 import { AppPageHeader } from "@/components/product/app-page-header";
 import { ConfidenceBadge } from "@/components/product/confidence-badge";
 import { EmptyState } from "@/components/product/empty-state";
+import { ForecastExplanation } from "@/components/product/forecast-explanation";
 import { LoadingSpinner } from "@/components/product/loading-spinner";
 import { StatCard } from "@/components/product/stat-card";
 import { StatusBadge } from "@/components/product/status-badge";
@@ -35,6 +36,7 @@ import { listUploads } from "@/lib/api/upload";
 import { DrugDetailPanel } from "@/components/product/drug-detail-panel";
 import {
   generateForecast,
+  explanationQueryKey,
   listCurrentStock,
   listForecasts,
   listLocationDrugs,
@@ -67,6 +69,7 @@ import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getBackendAccessToken } from "@/lib/supabase/session";
 import { formatForecastModelPathLabel } from "@/lib/forecast-model-metadata";
 import { cn } from "@/lib/utils";
+import { useForecastExplanation } from "@/hooks/use-forecast-explanation";
 import { useDrugMetadataMap } from "@/hooks/use-drug-metadata";
 import { useAppContext } from "@/providers/app-context";
 import type { UploadResponse } from "@/types/upload";
@@ -169,6 +172,7 @@ export default function DashboardPage() {
   const [forecastStockByDin, setForecastStockByDin] = useState<Map<string, number | null>>(new Map());
   const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
   const [forecastLoadWarning, setForecastLoadWarning] = useState<string | null>(null);
+  const [expandedExplanation, setExpandedExplanation] = useState<{ locationId: string; din: string } | null>(null);
   const stockInputRefs = useRef(new Map<string, HTMLInputElement>());
   const tableParentRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -307,6 +311,38 @@ export default function DashboardPage() {
       abortControllerRef.current?.abort();
     };
   }, []);
+
+  useEffect(() => {
+    setExpandedExplanation(null);
+  }, [locationId]);
+
+  const isExplanationExpanded = useCallback(
+    (din: string) => Boolean(locationId && expandedExplanation?.locationId === locationId && expandedExplanation.din === din),
+    [expandedExplanation, locationId]
+  );
+
+  const setExplanationExpanded = useCallback(
+    (din: string, nextOpen: boolean) => {
+      if (!locationId) {
+        return;
+      }
+
+      setExpandedExplanation(nextOpen ? { locationId, din } : null);
+    },
+    [locationId]
+  );
+
+  const clearExplanation = useCallback(
+    (din: string) => {
+      if (!locationId) {
+        return;
+      }
+
+      queryClient.removeQueries({ queryKey: explanationQueryKey(locationId, din) });
+      setExpandedExplanation((current) => (current?.locationId === locationId && current.din === din ? null : current));
+    },
+    [locationId, queryClient]
+  );
 
   const updateDrugDetailRoute = useCallback(
     (nextDin: string | null) => {
@@ -498,6 +534,7 @@ export default function DashboardPage() {
         const result = await generateForecast(locationId, row.din, horizonDays, accessToken);
         upsertForecastResult(queryClient, locationId, horizonDays, result, row);
         setDrugDetailForecast(queryClient, locationId, result);
+        clearExplanation(row.din);
         setForecastStockByDin((current) => new Map(current).set(row.din, row.currentStock));
         setToast({ tone: "success", message: `Forecast generated for ${row.din}.` });
       } catch (error) {
@@ -511,7 +548,7 @@ export default function DashboardPage() {
         });
       }
     },
-    [horizonDays, locationId, queryClient, savingDins]
+    [clearExplanation, horizonDays, locationId, queryClient, savingDins]
   );
 
   const runBulkGeneration = useCallback(
@@ -555,6 +592,7 @@ export default function DashboardPage() {
               try {
                 upsertForecastResult(queryClient, locationId, horizonDays, event.forecast, row);
                 setDrugDetailForecast(queryClient, locationId, event.forecast);
+                clearExplanation(event.din);
               } catch (error) {
                 succeeded = false;
                 clearForecastResult(queryClient, locationId, horizonDays, event.din);
@@ -617,7 +655,7 @@ export default function DashboardPage() {
         setBulkProgress(null);
       }
     },
-    [bulkProgress?.succeeded, horizonDays, locationId, queryClient, rows, stockMap]
+    [bulkProgress?.succeeded, clearExplanation, horizonDays, locationId, queryClient, rows, stockMap]
   );
 
   const requestBulkGeneration = useCallback(() => {
@@ -790,13 +828,16 @@ export default function DashboardPage() {
                     const stale = row.forecast && forecastStockByDin.has(row.din) && forecastStockByDin.get(row.din) !== row.currentStock;
 
                     return (
-                      <ForecastTableRow
-                        key={row.din}
-                        row={row}
-                        horizonDays={horizonDays}
-                        selected={isSelected}
-                        toggleSelected={() =>
-                          setSelectedDins((current) => {
+                        <ForecastTableRow
+                          key={row.din}
+                          locationId={locationId}
+                          row={row}
+                          horizonDays={horizonDays}
+                          explanationExpanded={isExplanationExpanded(row.din)}
+                          setExplanationExpanded={(nextOpen) => setExplanationExpanded(row.din, nextOpen)}
+                          selected={isSelected}
+                          toggleSelected={() =>
+                            setSelectedDins((current) => {
                             const next = new Set(current);
                             if (next.has(row.din)) next.delete(row.din);
                             else next.add(row.din);
@@ -817,9 +858,6 @@ export default function DashboardPage() {
                         rowError={rowErrors.get(row.din) ?? null}
                         stale={Boolean(stale)}
                         onGenerate={() => void handleGenerateRow(row)}
-                        onExplain={() =>
-                          setToast({ tone: "muted", message: "Forecast explanations are not available in this feature yet." })
-                        }
                         onOpenDetail={() => updateDrugDetailRoute(normalizeDin(row.din) ?? row.din)}
                       />
                     );
@@ -854,6 +892,13 @@ export default function DashboardPage() {
         locationId={locationId}
         din={selectedDetailDin}
         horizonDays={horizonDays}
+        explanationExpanded={Boolean(locationId && selectedDetailDin && expandedExplanation?.locationId === locationId && expandedExplanation.din === selectedDetailDin)}
+        onExplanationExpandedChange={(nextOpen) => {
+          if (!locationId || !selectedDetailDin) {
+            return;
+          }
+          setExpandedExplanation(nextOpen ? { locationId, din: selectedDetailDin } : null);
+        }}
         onOpenChange={(nextOpen) => {
           if (!nextOpen) {
             updateDrugDetailRoute(null);
@@ -1048,8 +1093,11 @@ function DashboardToolbar({
 }
 
 function ForecastTableRow({
+  locationId,
   row,
   horizonDays,
+  explanationExpanded,
+  setExplanationExpanded,
   selected,
   toggleSelected,
   editingStock,
@@ -1066,11 +1114,13 @@ function ForecastTableRow({
   rowError,
   stale,
   onGenerate,
-  onExplain,
   onOpenDetail
 }: {
+  locationId: string | null;
   row: DrugRow;
   horizonDays: number;
+  explanationExpanded: boolean;
+  setExplanationExpanded: (nextOpen: boolean) => void;
   selected: boolean;
   toggleSelected: () => void;
   editingStock: EditingState | null;
@@ -1087,148 +1137,206 @@ function ForecastTableRow({
   rowError: string | null;
   stale: boolean;
   onGenerate: () => void;
-  onExplain: () => void;
   onOpenDetail: () => void;
 }) {
   const isEditing = editingStock?.din === row.din;
   const hasStock = isStockEntered(row);
   const status = normalizedReorderStatus(row.forecast?.reorder_status);
   const discontinued = isDiscontinuedStatus(row.drugStatus);
+  const explanation = useForecastExplanation({
+    locationId,
+    din: row.forecast ? row.din : null,
+    accessTokenLabel: "dashboard-explain-forecast"
+  });
+
+  const explanationTitle = `${formatDrugName(row)} — Forecast explanation`;
+
+  async function handleExplainClick() {
+    if (!row.forecast) {
+      return;
+    }
+
+    setExplanationExpanded(true);
+    try {
+      await explanation.explain();
+    } catch {
+      // Query state drives the visible error message.
+    }
+  }
+
+  async function handleRetryExplanation() {
+    if (!row.forecast) {
+      return;
+    }
+
+    setExplanationExpanded(true);
+    try {
+      await explanation.explain({ force: true });
+    } catch {
+      // Query state drives the visible error message.
+    }
+  }
 
   return (
-    <tr
-      className={cn("border-b border-border bg-white transition-colors hover:bg-slate-50", status === "RED" && "bg-red-50/30")}
-      onClick={onOpenDetail}
-    >
-      <td className="px-3 py-4" onClick={(event) => event.stopPropagation()}>
-        <input
-          type="checkbox"
-          aria-label={`Select ${row.drugName}`}
-          className="h-4 w-4 rounded border-input text-primary focus:ring-ring"
-          checked={selected}
-          onChange={toggleSelected}
-        />
-      </td>
-      <td className="px-4 py-4">
-        <div className="min-w-0 space-y-1">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <span className="font-semibold text-slate-900">{formatDrugName(row)}</span>
-            {discontinued ? <Badge variant="danger">Discontinued</Badge> : null}
-          </div>
-          <div className="font-mono text-xs text-muted-foreground">{normalizeDin(row.din) ?? row.din}</div>
-          {row.therapeuticClass ? <div className="truncate text-xs text-muted-foreground">{row.therapeuticClass}</div> : null}
-        </div>
-      </td>
-      <td className="px-4 py-4" onClick={(event) => event.stopPropagation()}>
-        {isEditing ? (
+    <>
+      <tr
+        className={cn("border-b border-border bg-white transition-colors hover:bg-slate-50", status === "RED" && "bg-red-50/30")}
+        onClick={onOpenDetail}
+      >
+        <td className="px-3 py-4" onClick={(event) => event.stopPropagation()}>
           <input
-            ref={(element) => {
-              if (element) stockInputRefs.current.set(row.din, element);
-              else stockInputRefs.current.delete(row.din);
-            }}
-            aria-label={`Current stock for ${row.drugName}`}
-            type="number"
-            min="0"
-            inputMode="numeric"
-            className="h-8 min-w-[72px] rounded-md border border-input bg-white px-2 text-sm outline-none [appearance:textfield] focus:ring-2 focus:ring-ring [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-            value={editingStock.value}
-            onChange={(event) =>
-              setEditingStock({ ...editingStock, value: event.target.value })
-            }
-            onBlur={() => void commitStockEdit(false)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                void commitStockEdit(false);
-              }
-              if (event.key === "Tab") {
-                event.preventDefault();
-                void commitStockEdit(true);
-              }
-              if (event.key === "Escape") {
-                event.preventDefault();
-                cancelStockEdit();
-              }
-            }}
+            type="checkbox"
+            aria-label={`Select ${row.drugName}`}
+            className="h-4 w-4 rounded border-input text-primary focus:ring-ring"
+            checked={selected}
+            onChange={toggleSelected}
           />
-        ) : (
-          <div className="space-y-1">
-            <button
-              type="button"
-              disabled={locked}
-              className={cn(
-                "group inline-flex min-h-8 items-center gap-1 rounded-md px-1 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60",
-                hasStock ? "text-slate-900" : "text-amber-700"
-              )}
-              onClick={() => startEditingStock(row.din)}
-            >
-              <span>{hasStock ? `${row.currentStock} units` : "Enter qty"}</span>
-              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : null}
-              {saved ? <Check className="h-3.5 w-3.5 text-green-600" aria-hidden="true" /> : null}
-              {!saved && !saving ? (
-                <Edit3
-                  className={cn("h-3.5 w-3.5", hasStock ? "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" : "opacity-100")}
-                  aria-hidden="true"
-                />
-              ) : null}
-            </button>
-            {hasStock && row.stockUpdatedAt ? (
-              <div className="px-1 text-[11px] text-muted-foreground" title={row.stockUpdatedAt}>
-                Updated {relativeTime(row.stockUpdatedAt)}
-              </div>
-            ) : null}
+        </td>
+        <td className="px-4 py-4">
+          <div className="min-w-0 space-y-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <span className="font-semibold text-slate-900">{formatDrugName(row)}</span>
+              {discontinued ? <Badge variant="danger">Discontinued</Badge> : null}
+            </div>
+            <div className="font-mono text-xs text-muted-foreground">{normalizeDin(row.din) ?? row.din}</div>
+            {row.therapeuticClass ? <div className="truncate text-xs text-muted-foreground">{row.therapeuticClass}</div> : null}
           </div>
-        )}
-        {warning ? <div className="mt-1 text-xs font-medium text-red-600">{warning}</div> : null}
-      </td>
-      <td className="px-4 py-4">
-        {generating ? <Loader2 className="h-4 w-4 animate-spin text-pharma-teal" aria-label="Generating forecast" /> : <DaysOfSupply row={row} />}
-        {rowError ? <div className="mt-1 text-xs font-medium text-red-600">{rowError}</div> : null}
-      </td>
-      <td className="px-4 py-4 text-sm text-slate-700">
-        {generating ? (
-          <Loader2 className="h-4 w-4 animate-spin text-pharma-teal" aria-hidden="true" />
-        ) : row.forecast?.predicted_quantity !== null && row.forecast?.predicted_quantity !== undefined ? (
-          `${row.forecast.predicted_quantity} units / ${horizonDays} days`
-        ) : (
-          "—"
-        )}
-      </td>
-      <td className="px-4 py-4">
-        {row.forecast?.confidence ? <ConfidenceBadge value={row.forecast.confidence.toLowerCase() as "high" | "medium" | "low"} /> : null}
-      </td>
-      <td className="px-4 py-4">
-        <div className="space-y-1">
-          <RowStatusBadge row={row} horizonDays={horizonDays} discontinued={discontinued} rowError={rowError} />
-          {row.forecast ? <Badge variant="muted">Model: {formatForecastModelPathLabel(row.forecast.model_path)}</Badge> : null}
-          {stale ? <Badge variant="warning">Stock changed</Badge> : null}
-        </div>
-      </td>
-      <td className="px-4 py-4 text-sm text-muted-foreground">
-        {!hasStock ? "—" : row.forecast?.generated_at ? relativeTime(row.forecast.generated_at) : "Never"}
-      </td>
-      <td className="px-4 py-4" onClick={(event) => event.stopPropagation()}>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant={hasStock ? "teal" : "outline"}
-            disabled={!hasStock || generating || saving}
-            title={!hasStock ? "Enter current stock first" : undefined}
-            onClick={onGenerate}
-          >
-            {generating ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
-            {row.forecast ? "Regenerate" : "Generate"}
-          </Button>
-          {row.forecast ? (
-            <Button type="button" size="sm" variant="ghost" className="transition-opacity" onClick={onExplain}>
-              <Sparkles className="h-4 w-4" aria-hidden="true" />
-              Explain
+        </td>
+        <td className="px-4 py-4" onClick={(event) => event.stopPropagation()}>
+          {isEditing ? (
+            <input
+              ref={(element) => {
+                if (element) stockInputRefs.current.set(row.din, element);
+                else stockInputRefs.current.delete(row.din);
+              }}
+              aria-label={`Current stock for ${row.drugName}`}
+              type="number"
+              min="0"
+              inputMode="numeric"
+              className="h-8 min-w-[72px] rounded-md border border-input bg-white px-2 text-sm outline-none [appearance:textfield] focus:ring-2 focus:ring-ring [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+              value={editingStock.value}
+              onChange={(event) =>
+                setEditingStock({ ...editingStock, value: event.target.value })
+              }
+              onBlur={() => void commitStockEdit(false)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void commitStockEdit(false);
+                }
+                if (event.key === "Tab") {
+                  event.preventDefault();
+                  void commitStockEdit(true);
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  cancelStockEdit();
+                }
+              }}
+            />
+          ) : (
+            <div className="space-y-1">
+              <button
+                type="button"
+                disabled={locked}
+                className={cn(
+                  "group inline-flex min-h-8 items-center gap-1 rounded-md px-1 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60",
+                  hasStock ? "text-slate-900" : "text-amber-700"
+                )}
+                onClick={() => startEditingStock(row.din)}
+              >
+                <span>{hasStock ? `${row.currentStock} units` : "Enter qty"}</span>
+                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : null}
+                {saved ? <Check className="h-3.5 w-3.5 text-green-600" aria-hidden="true" /> : null}
+                {!saved && !saving ? (
+                  <Edit3
+                    className={cn("h-3.5 w-3.5", hasStock ? "opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" : "opacity-100")}
+                    aria-hidden="true"
+                  />
+                ) : null}
+              </button>
+              {hasStock && row.stockUpdatedAt ? (
+                <div className="px-1 text-[11px] text-muted-foreground" title={row.stockUpdatedAt}>
+                  Updated {relativeTime(row.stockUpdatedAt)}
+                </div>
+              ) : null}
+            </div>
+          )}
+          {warning ? <div className="mt-1 text-xs font-medium text-red-600">{warning}</div> : null}
+        </td>
+        <td className="px-4 py-4">
+          {generating ? <Loader2 className="h-4 w-4 animate-spin text-pharma-teal" aria-label="Generating forecast" /> : <DaysOfSupply row={row} />}
+          {rowError ? <div className="mt-1 text-xs font-medium text-red-600">{rowError}</div> : null}
+        </td>
+        <td className="px-4 py-4 text-sm text-slate-700">
+          {generating ? (
+            <Loader2 className="h-4 w-4 animate-spin text-pharma-teal" aria-hidden="true" />
+          ) : row.forecast?.predicted_quantity !== null && row.forecast?.predicted_quantity !== undefined ? (
+            `${row.forecast.predicted_quantity} units / ${horizonDays} days`
+          ) : (
+            "—"
+          )}
+        </td>
+        <td className="px-4 py-4">
+          {row.forecast?.confidence ? <ConfidenceBadge value={row.forecast.confidence.toLowerCase() as "high" | "medium" | "low"} /> : null}
+        </td>
+        <td className="px-4 py-4">
+          <div className="space-y-1">
+            <RowStatusBadge row={row} horizonDays={horizonDays} discontinued={discontinued} rowError={rowError} />
+            {row.forecast ? <Badge variant="muted">Model: {formatForecastModelPathLabel(row.forecast.model_path)}</Badge> : null}
+            {stale ? <Badge variant="warning">Stock changed</Badge> : null}
+          </div>
+        </td>
+        <td className="px-4 py-4 text-sm text-muted-foreground">
+          {!hasStock ? "—" : row.forecast?.generated_at ? relativeTime(row.forecast.generated_at) : "Never"}
+        </td>
+        <td className="px-4 py-4" onClick={(event) => event.stopPropagation()}>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant={hasStock ? "teal" : "outline"}
+              disabled={!hasStock || generating || saving}
+              title={!hasStock ? "Enter current stock first" : undefined}
+              onClick={onGenerate}
+            >
+              {generating ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
+              {row.forecast ? "Regenerate" : "Generate"}
             </Button>
-          ) : null}
-        </div>
-      </td>
-    </tr>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className={cn(
+                "transition-opacity duration-300",
+                row.forecast ? "opacity-100" : "pointer-events-none opacity-0"
+              )}
+              aria-hidden={!row.forecast}
+              tabIndex={row.forecast ? 0 : -1}
+              disabled={!row.forecast || explanation.isLoading}
+              onClick={() => void handleExplainClick()}
+            >
+              {explanation.isLoading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Sparkles className="h-4 w-4" aria-hidden="true" />}
+              {explanation.isLoading ? "Explaining..." : "Explain"}
+            </Button>
+          </div>
+        </td>
+      </tr>
+      {row.forecast && explanationExpanded ? (
+        <tr className="border-b border-border bg-white">
+          <td colSpan={9} className="px-4 pb-4 pt-0" onClick={(event) => event.stopPropagation()}>
+            <ForecastExplanation
+              title={explanationTitle}
+              explanation={explanation.explanationText}
+              isLoading={explanation.isLoading}
+              isError={explanation.isError}
+              onRetry={() => void handleRetryExplanation()}
+              onCollapse={() => setExplanationExpanded(false)}
+            />
+          </td>
+        </tr>
+      ) : null}
+    </>
   );
 }
 

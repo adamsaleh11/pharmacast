@@ -1,6 +1,7 @@
 import { ApiError, createApiClient } from "@/lib/api/client";
 import { getPublicEnv } from "@/lib/env";
 import { normalizeForecastResult, normalizeForecastSummary } from "@/lib/forecast-dashboard/model";
+import type { ForecastExplanationResponse } from "@/types/forecast-explanation";
 import type {
   CurrentStockResponse,
   DrugListResponse,
@@ -11,6 +12,11 @@ import type {
 } from "@/types/forecast-dashboard";
 
 const apiClient = createApiClient();
+export const EXPLANATION_STALE_TIME_MS = 60 * 60 * 1000;
+
+export function explanationQueryKey(locationId: string | null | undefined, din: string | null | undefined) {
+  return ["explanation", locationId, din] as const;
+}
 
 export function listForecasts(
   locationId: string,
@@ -70,8 +76,14 @@ export function generateForecast(
   ).then((response) => normalizeForecastResult(response, "Forecast generation response"));
 }
 
-export function explainForecast(locationId: string, din: string, accessToken: string): Promise<unknown> {
-  return apiClient.post<unknown>(`/locations/${locationId}/forecasts/${din}/explain`, undefined, { accessToken });
+export function explainForecast(
+  locationId: string,
+  din: string,
+  accessToken: string
+): Promise<ForecastExplanationResponse> {
+  return apiClient.post<ForecastExplanationResponse>(`/locations/${locationId}/forecasts/${din}/explain`, undefined, {
+    accessToken
+  });
 }
 
 export type StreamBatchForecastOptions = {

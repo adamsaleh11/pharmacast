@@ -1,5 +1,6 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
-import { vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import OverviewPage from "./(app)/overview/page";
 import ChatPage from "./(app)/chat/page";
 import InsightsPage from "./(app)/insights/page";
@@ -18,13 +19,22 @@ vi.mock("next/navigation", () => ({
 
 describe("route stubs", () => {
   it("renders product page surfaces without live API calls", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0 },
+        mutations: { retry: false, gcTime: 0 }
+      }
+    });
+
     render(
-      <div>
-        <OverviewPage />
-        <ChatPage />
-        <InsightsPage />
-        <SettingsPage />
-      </div>
+      <QueryClientProvider client={queryClient}>
+        <div>
+          <OverviewPage />
+          <ChatPage />
+          <InsightsPage />
+          <SettingsPage />
+        </div>
+      </QueryClientProvider>
     );
 
     expect(screen.getByRole("heading", { name: "Overview" })).toBeInTheDocument();

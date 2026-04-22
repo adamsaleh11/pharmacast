@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Check, ChevronRight, Edit3, Info, Loader2, Sparkles, TriangleAlert, X } from "lucide-react";
 import { ConfidenceBadge } from "@/components/product/confidence-badge";
+import { ForecastExplanation } from "@/components/product/forecast-explanation";
 import { LoadingSpinner } from "@/components/product/loading-spinner";
 import { StatusBadge } from "@/components/product/status-badge";
 import { Badge } from "@/components/ui/badge";
@@ -16,7 +17,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError } from "@/lib/api/client";
 import { createStockAdjustment, drugDetailQueryKey, getDrugDetail, resetDrugThreshold, upsertDrugThreshold } from "@/lib/api/drug-detail";
-import { explainForecast, generateForecast } from "@/lib/api/forecast-dashboard";
+import { explanationQueryKey, generateForecast } from "@/lib/api/forecast-dashboard";
 import { normalizeDin } from "@/lib/api/drugs";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getBackendAccessToken } from "@/lib/supabase/session";
@@ -28,6 +29,7 @@ import {
   setDrugDetailForecast,
   setDrugDetailThreshold
 } from "@/lib/drug-detail-cache";
+import { useForecastExplanation } from "@/hooks/use-forecast-explanation";
 import type {
   DrugDetailDispensingHistoryDto,
   DrugDetailResponse,
@@ -42,6 +44,8 @@ type DrugDetailPanelProps = {
   horizonDays: number;
   onOpenChange: (open: boolean) => void;
   onStockSaved?: (din: string, quantity: number | null, updatedAt: string | null) => void;
+  explanationExpanded: boolean;
+  onExplanationExpandedChange: (nextOpen: boolean) => void;
 };
 
 type ThresholdDraft = {
@@ -149,27 +153,6 @@ function getThresholdValidationError(draft: ThresholdDraft) {
   return null;
 }
 
-function extractExplanationText(value: unknown) {
-  if (typeof value === "string") {
-    return value.trim();
-  }
-
-  if (typeof value === "object" && value !== null) {
-    const record = value as Record<string, unknown>;
-    const candidate = record.explanation ?? record.text ?? record.message ?? record.content;
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-    try {
-      return JSON.stringify(value, null, 2);
-    } catch {
-      return "Explanation received.";
-    }
-  }
-
-  return "Explanation received.";
-}
-
 function chartPointToY(value: number, max: number, height: number) {
   const paddedMax = Math.max(max, 1);
   const ratio = value / paddedMax;
@@ -199,7 +182,9 @@ export function DrugDetailPanel({
   din,
   horizonDays,
   onOpenChange,
-  onStockSaved
+  onStockSaved,
+  explanationExpanded,
+  onExplanationExpandedChange
 }: DrugDetailPanelProps) {
   const queryClient = useQueryClient();
   const selectedDin = normalizeDin(din) ?? din?.trim() ?? null;
@@ -208,8 +193,6 @@ export function DrugDetailPanel({
   const [stockDraft, setStockDraft] = useState("");
   const [stockError, setStockError] = useState<string | null>(null);
   const [stockSaved, setStockSaved] = useState(false);
-  const [explanationText, setExplanationText] = useState<string | null>(null);
-  const [explanationError, setExplanationError] = useState<string | null>(null);
   const stockInputRef = useRef<HTMLInputElement>(null);
 
   const detailQuery = useQuery({
@@ -272,14 +255,6 @@ export function DrugDetailPanel({
     }
   });
 
-  const explainMutation = useMutation({
-    retry: false,
-    mutationFn: async () => {
-      const accessToken = await getDashboardAccessToken("drug-detail-explain-forecast");
-      return explainForecast(locationId ?? "", selectedDin ?? "", accessToken);
-    }
-  });
-
   const adjustmentMutation = useMutation({
     retry: false,
     mutationFn: async (body: { adjustment_quantity: number; note: string }) => {
@@ -290,6 +265,11 @@ export function DrugDetailPanel({
 
   const actualSeries = useMemo(() => sortWeeklyHistory(history ?? []).slice(-12), [history]);
   const forecastSeries = useMemo(() => (detail ? buildForecastSeries(detail) : []), [detail]);
+  const explanation = useForecastExplanation({
+    locationId,
+    din: selectedDin,
+    accessTokenLabel: "drug-detail-explain-forecast"
+  });
 
   function syncDetailStock(quantity: number | null, updatedAt: string | null) {
     if (!locationId || !selectedDin) {
@@ -349,25 +329,24 @@ export function DrugDetailPanel({
       const result = await generateForecastMutation.mutateAsync();
       setDrugDetailForecast(queryClient, locationId, result);
       queryClient.invalidateQueries({ queryKey: ["forecasts", locationId, horizonDays] as const });
-      setExplanationText(null);
-      setExplanationError(null);
-    } catch (error) {
-      setExplanationError(error instanceof Error ? error.message : "Failed to generate forecast.");
+      queryClient.removeQueries({ queryKey: explanationQueryKey(locationId, selectedDin) });
+      onExplanationExpandedChange(false);
+    } catch {
+      // Forecast generation errors are handled elsewhere in the panel UI.
     }
   }
 
-  async function handleExplainForecast() {
+  async function handleExplainForecast(force = false) {
     if (!locationId || !selectedDin) {
       return;
     }
 
-    setExplanationError(null);
+    onExplanationExpandedChange(true);
 
     try {
-      const response = await explainMutation.mutateAsync();
-      setExplanationText(extractExplanationText(response));
-    } catch (error) {
-      setExplanationError(error instanceof Error ? error.message : "Forecast explanation is unavailable.");
+      await explanation.explain({ force });
+    } catch {
+      // Query state drives the visible error message.
     }
   }
 
@@ -669,25 +648,25 @@ export function DrugDetailPanel({
 
                         {forecast ? (
                           <div className="space-y-3">
-                            <Button type="button" variant="ghost" className="px-0 text-teal-700 hover:bg-transparent hover:text-teal-800" onClick={() => void handleExplainForecast()}>
-                              <Sparkles className="h-4 w-4" aria-hidden="true" />
-                              Explain this forecast
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              className="px-0 text-teal-700 hover:bg-transparent hover:text-teal-800"
+                              disabled={explanation.isLoading}
+                              onClick={() => void handleExplainForecast()}
+                            >
+                              {explanation.isLoading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Sparkles className="h-4 w-4" aria-hidden="true" />}
+                              {explanation.isLoading ? "Explaining..." : "Explain this forecast"}
                             </Button>
-                            {explainMutation.isPending ? (
-                              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                                Preparing explanation...
-                              </div>
-                            ) : null}
-                            {explanationError ? (
-                              <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-                                {explanationError}
-                              </div>
-                            ) : null}
-                            {explanationText ? (
-                              <div className="border-l-4 border-teal-500 bg-teal-50 px-3 py-2 text-sm text-slate-800">
-                                {explanationText}
-                              </div>
+                            {explanationExpanded ? (
+                              <ForecastExplanation
+                                title={`${forecast.drug_name ?? detail?.drug.name ?? "Forecast"} — Forecast explanation`}
+                                explanation={explanation.explanationText}
+                                isLoading={explanation.isLoading}
+                                isError={explanation.isError}
+                                onRetry={() => void handleExplainForecast(true)}
+                                onCollapse={() => onExplanationExpandedChange(false)}
+                              />
                             ) : null}
                           </div>
                         ) : null}
