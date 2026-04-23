@@ -1,24 +1,33 @@
 "use client";
 
-import Link from "next/link";
-import { ArrowDown, Clock3, MessageSquareText, Plus, Send, Square } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ArrowDown, Clock3, Loader2, MessageSquareText, Plus, Send, Square } from "lucide-react";
+import { createPortal } from "react-dom";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { productNavigation } from "@/components/app-shell/navigation";
-import { readJsonError, sendChatMessage } from "@/lib/api/chat";
+import {
+  chatConversationsQueryKey,
+  chatConversationHistoryQueryKey,
+  listChatConversationHistory,
+  listChatConversations,
+  readJsonError,
+  sendChatMessage
+} from "@/lib/api/chat";
+import { getChatSidebarSlot, subscribeChatSidebarSlot } from "@/lib/chat-sidebar-slot";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getBackendAccessToken } from "@/lib/supabase/session";
 import { readChatStreamResponse } from "@/lib/chat-stream";
 import { cn } from "@/lib/utils";
 import { useAppContext } from "@/providers/app-context";
 import type { ChatStreamDebugEvent } from "@/lib/chat-stream";
-import type { ChatConversationMessage, ChatRole } from "@/types/chat";
+import type { ChatConversationMessage, ChatConversationResponse, ChatMessageResponse, ChatRole } from "@/types/chat";
 
 type ThreadMessage = {
   id: string;
+  conversationId: string;
   role: ChatRole;
   content: string;
   createdAt: string;
@@ -28,10 +37,12 @@ type ThreadMessage = {
 
 type SidebarConversation = {
   id: string;
-  title: string;
+  label: string;
   preview: string;
-  createdAt: string;
+  meta: string;
   anchorId: string;
+  messageCount: number;
+  isDraft: boolean;
 };
 
 type ArchivedThread = {
@@ -100,7 +111,23 @@ function logChatDebug(event: ChatStreamDebugEvent | { type: "response"; status: 
   console.debug("[chat-stream]", event);
 }
 
-function summarizeThread(messages: ThreadMessage[]): SidebarConversation | null {
+async function getChatAccessToken(label: string) {
+  const supabase = createSupabaseBrowserClient();
+
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const accessToken = await getBackendAccessToken(supabase, label);
+
+  if (!accessToken) {
+    throw new Error("You must be signed in to view chat history.");
+  }
+
+  return accessToken;
+}
+
+function summarizeDraftThread(messages: ThreadMessage[]): SidebarConversation | null {
   if (messages.length === 0) {
     return null;
   }
@@ -110,33 +137,100 @@ function summarizeThread(messages: ThreadMessage[]): SidebarConversation | null 
   const anchor = firstUserMessage ?? messages[0];
 
   return {
-    id: anchor.id,
-    title: truncate(firstUserMessage?.content ?? "New conversation", 42),
+    id: anchor.conversationId,
+    label: truncate(firstUserMessage?.content ?? "New conversation", 42),
     preview: truncate(lastAssistantMessage?.content || firstUserMessage?.content || "New conversation", 64),
-    createdAt: anchor.createdAt,
-    anchorId: anchor.id
+    meta: "Unsaved draft",
+    anchorId: anchor.id,
+    messageCount: messages.length,
+    isDraft: true
+  };
+}
+
+function summarizeConversationSummary(summary: ChatConversationResponse): SidebarConversation {
+  return {
+    id: summary.conversation_id,
+    label: `${summary.message_count} ${summary.message_count === 1 ? "message" : "messages"}`,
+    preview: `Started ${formatTimestamp(summary.started_at)}`,
+    meta: `Updated ${formatTimestamp(summary.last_message_at)}`,
+    anchorId: summary.conversation_id,
+    messageCount: summary.message_count,
+    isDraft: false
   };
 }
 
 function snapshotThread(
-  threadId: string,
+  conversationId: string,
   messages: ThreadMessage[],
   conversationHistory: ChatConversationMessage[]
 ): ArchivedThread | null {
-  const sidebar = summarizeThread(messages);
+  if (messages.length === 0) {
+    return null;
+  }
+
+  const sidebar = summarizeDraftThread(messages);
+
   if (!sidebar) {
     return null;
   }
 
   return {
-    id: threadId,
+    id: conversationId,
     messages: messages.map((message) => ({ ...message })),
     conversationHistory: conversationHistory.map((message) => ({ ...message })),
     sidebar: {
       ...sidebar,
-      id: threadId,
+      id: conversationId
     }
   };
+}
+
+function toThreadMessage(message: ChatMessageResponse): ThreadMessage {
+  return {
+    id: message.id,
+    conversationId: message.conversation_id,
+    role: message.role,
+    content: message.content,
+    createdAt: message.created_at
+  };
+}
+
+function finalizeInterruptedThread(messages: ThreadMessage[], assistantId: string | null, partialContent: string) {
+  if (!assistantId) {
+    return messages.map((message) => ({ ...message }));
+  }
+
+  const nextMessages: ThreadMessage[] = [];
+
+  messages.forEach((message) => {
+    if (message.id !== assistantId) {
+      nextMessages.push({ ...message });
+      return;
+    }
+
+    const content = partialContent || message.content;
+    if (content.trim().length === 0) {
+      return;
+    }
+
+    nextMessages.push({
+      ...message,
+      content,
+      status: undefined,
+      errorMessage: undefined
+    });
+  });
+
+  return nextMessages;
+}
+
+function messageHistoryFromThread(messages: ThreadMessage[]) {
+  return messages
+    .filter((message) => message.content.trim().length > 0 && message.status !== "streaming")
+    .map((message) => ({
+      role: message.role,
+      content: message.content
+    }));
 }
 
 function TypingIndicator() {
@@ -204,7 +298,10 @@ function ChatBubble({
       : "bg-slate-100 text-slate-800";
 
   return (
-    <div className={cn("group flex w-full", isUser ? "justify-end" : "justify-start")} ref={(node) => registerRef(message.id, node)}>
+    <div
+      className={cn("group flex w-full", isUser ? "justify-end" : "justify-start")}
+      ref={(node) => registerRef(message.id, node)}
+    >
       <div className={cn("relative max-w-[80%] rounded-2xl px-4 py-3 shadow-sm", isUser ? "max-w-[75%]" : "", bubbleTone)}>
         <span className="pointer-events-none absolute -top-5 right-2 select-none text-xs text-slate-400 opacity-0 transition-opacity group-hover:opacity-100">
           {formatTimestamp(message.createdAt)}
@@ -231,8 +328,49 @@ function ChatBubble({
   );
 }
 
+function ChatSidebarConversationItem({
+  conversation,
+  active,
+  onSelect
+}: {
+  conversation: SidebarConversation;
+  active: boolean;
+  onSelect: (conversationId: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={() => onSelect(conversation.id)}
+      className={cn(
+        "w-full rounded-2xl border px-3 py-3 text-left transition",
+        active
+          ? "border-white/20 bg-white/12 shadow-[0_0_0_1px_rgba(255,255,255,0.12)]"
+          : "border-transparent hover:border-white/10 hover:bg-white/10"
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium text-white">{conversation.label}</div>
+          <div className="mt-1 line-clamp-2 text-xs leading-5 text-white/70">{conversation.preview}</div>
+        </div>
+        <div className="shrink-0 rounded-full bg-white/10 px-2 py-1 text-[11px] font-medium text-white/80">
+          {conversation.messageCount}
+        </div>
+      </div>
+      <div className="mt-2 flex items-center gap-1 text-[11px] text-white/40">
+        <Clock3 className="h-3 w-3" aria-hidden="true" />
+        {conversation.meta}
+      </div>
+    </button>
+  );
+}
+
 function ChatWorkspace({ authReady, locationId }: { authReady: boolean; locationId: string | null }) {
-  const [threadId, setThreadId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const chatSidebarSlot = useSyncExternalStore(subscribeChatSidebarSlot, getChatSidebarSlot, () => null);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [threadMessages, setThreadMessages] = useState<ThreadMessage[]>([]);
   const [conversationHistory, setConversationHistory] = useState<ChatConversationMessage[]>([]);
   const [archivedThreads, setArchivedThreads] = useState<ArchivedThread[]>([]);
@@ -245,11 +383,22 @@ function ChatWorkspace({ authReady, locationId }: { authReady: boolean; location
   const threadScrollRef = useRef<HTMLDivElement | null>(null);
   const activeAbortControllerRef = useRef<AbortController | null>(null);
   const activeAssistantIdRef = useRef<string | null>(null);
+  const activeConversationIdRef = useRef<string | null>(null);
   const streamContentRef = useRef("");
   const streamClosedRef = useRef(false);
   const streamStoppedRef = useRef(false);
   const messageRefs = useRef(new Map<string, HTMLDivElement | null>());
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const threadMessagesRef = useRef<ThreadMessage[]>([]);
+  const conversationHistoryRef = useRef<ChatConversationMessage[]>([]);
+
+  useEffect(() => {
+    threadMessagesRef.current = threadMessages;
+  }, [threadMessages]);
+
+  useEffect(() => {
+    conversationHistoryRef.current = conversationHistory;
+  }, [conversationHistory]);
 
   const resizeTextarea = useCallback((node: HTMLTextAreaElement | null = textareaRef.current) => {
     if (!node) {
@@ -261,14 +410,104 @@ function ChatWorkspace({ authReady, locationId }: { authReady: boolean; location
     node.style.height = `${nextHeight}px`;
   }, []);
 
+  const conversationsQuery = useQuery({
+    queryKey: chatConversationsQueryKey(locationId),
+    enabled: Boolean(locationId && authReady),
+    staleTime: 15_000,
+    queryFn: async () => {
+      const accessToken = await getChatAccessToken("chat-conversations");
+      return listChatConversations(locationId ?? "", accessToken);
+    }
+  });
+
+  const backendConversationIds = useMemo(
+    () => new Set((conversationsQuery.data ?? []).map((conversation) => conversation.conversation_id)),
+    [conversationsQuery.data]
+  );
+
+  const selectedConversationId = activeConversationId ?? conversationsQuery.data?.[0]?.conversation_id ?? null;
+
+  useEffect(() => {
+    activeConversationIdRef.current = selectedConversationId;
+  }, [selectedConversationId]);
+
+  const activeCachedConversation = useMemo(
+    () => archivedThreads.find((thread) => thread.id === selectedConversationId) ?? null,
+    [archivedThreads, selectedConversationId]
+  );
+
+  const activeBackendConversation = useMemo(
+    () => conversationsQuery.data?.find((conversation) => conversation.conversation_id === selectedConversationId) ?? null,
+    [conversationsQuery.data, selectedConversationId]
+  );
+
+  const activeConversationHistoryQuery = useQuery({
+    queryKey: chatConversationHistoryQueryKey(locationId, selectedConversationId),
+    enabled: Boolean(locationId && selectedConversationId && activeBackendConversation && !activeCachedConversation && threadMessages.length === 0),
+    staleTime: 0,
+    queryFn: async () => {
+      if (!locationId || !selectedConversationId) {
+        return [] as ChatMessageResponse[];
+      }
+
+      const accessToken = await getChatAccessToken("chat-conversation-history");
+      return listChatConversationHistory(locationId, selectedConversationId, accessToken);
+    }
+  });
+
+  const activeDraftConversation = useMemo<SidebarConversation | null>(() => {
+    if (!activeConversationId || backendConversationIds.has(activeConversationId)) {
+      return null;
+    }
+
+    if (threadMessages.length === 0) {
+      return {
+        id: activeConversationId,
+        label: "New conversation",
+        preview: "No messages yet",
+        meta: isStreaming ? "Generating response..." : "Unsaved draft",
+        anchorId: activeConversationId,
+        messageCount: 0,
+        isDraft: true
+      };
+    }
+
+    const draftSummary = summarizeDraftThread(threadMessages);
+    if (!draftSummary) {
+      return null;
+    }
+
+    return {
+      ...draftSummary,
+      id: activeConversationId,
+      meta: isStreaming ? "Generating response..." : draftSummary.meta
+    };
+  }, [activeConversationId, backendConversationIds, isStreaming, threadMessages]);
+
+  const sidebarConversations = useMemo(() => {
+    const persisted = [...(conversationsQuery.data ?? [])]
+      .sort((left, right) => new Date(right.last_message_at).getTime() - new Date(left.last_message_at).getTime())
+      .map((conversation) => summarizeConversationSummary(conversation));
+
+    if (activeDraftConversation) {
+      return [activeDraftConversation, ...persisted];
+    }
+
+    return persisted;
+  }, [activeDraftConversation, conversationsQuery.data]);
+
   const activeThreadMessages = threadMessages;
-  const sidebarHistory = useMemo(() => archivedThreads.map((thread) => thread.sidebar).slice(0, HISTORY_SIDEBAR_LIMIT), [
-    archivedThreads
-  ]);
   const threadIsEmpty = activeThreadMessages.length === 0;
   const characterCount = inputValue.length;
   const characterCountVisible = characterCount >= 1500;
   const characterCountTone = characterCount >= 1800 ? "text-amber-700" : "text-slate-500";
+  const conversationLoading = Boolean(
+    activeConversationHistoryQuery.isLoading && threadMessages.length === 0 && activeBackendConversation && !activeCachedConversation
+  );
+  const conversationHistoryError = activeConversationHistoryQuery.isError
+    ? "Unable to load this conversation. Try selecting it again."
+    : null;
+  const conversationsError = conversationsQuery.isError ? "Unable to load conversation history." : null;
 
   const scrollThreadToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     const thread = threadScrollRef.current;
@@ -299,35 +538,111 @@ function ChatWorkspace({ authReady, locationId }: { authReady: boolean; location
     });
   }, []);
 
-  const appendToken = useCallback(
-    (token: string) => {
-      const assistantId = activeAssistantIdRef.current;
-      if (!assistantId) {
+  const clearCurrentStream = useCallback(
+    (options?: { preserveThread: boolean }) => {
+      if (!isStreaming) {
         return;
       }
 
-      streamContentRef.current += token;
+      streamStoppedRef.current = true;
+      streamClosedRef.current = true;
+      activeAbortControllerRef.current?.abort();
+      activeAbortControllerRef.current = null;
+      setIsStreaming(false);
 
-      setThreadMessages((current) =>
-        current.map((message) =>
-          message.id === assistantId
-            ? {
-                ...message,
-                content: streamContentRef.current,
-                status: "streaming",
-                errorMessage: undefined
-              }
-            : message
-        )
-      );
+      const assistantId = activeAssistantIdRef.current;
 
-      setStreamingStatusMessage(null);
-
-      if (isPinnedToBottom) {
-        requestAnimationFrame(() => scrollThreadToBottom("auto"));
+      if (options?.preserveThread && assistantId) {
+        const nextMessages = finalizeInterruptedThread(threadMessagesRef.current, assistantId, streamContentRef.current);
+        threadMessagesRef.current = nextMessages;
+        setThreadMessages(nextMessages);
       }
+
+      activeAssistantIdRef.current = null;
+      streamContentRef.current = "";
+      setStreamingStatusMessage(null);
+      setShowBackToBottom(false);
+      setIsPinnedToBottom(true);
     },
-    [isPinnedToBottom, scrollThreadToBottom]
+    [isStreaming]
+  );
+
+  const refreshConversationQueries = useCallback(() => {
+    if (!locationId) {
+      return;
+    }
+
+    void queryClient.invalidateQueries({ queryKey: chatConversationsQueryKey(locationId) });
+    if (selectedConversationId) {
+      void queryClient.invalidateQueries({
+        queryKey: chatConversationHistoryQueryKey(locationId, selectedConversationId)
+      });
+    }
+  }, [locationId, queryClient, selectedConversationId]);
+
+  const hydrateConversation = useCallback(
+    (conversationId: string, messages: ThreadMessage[], history: ChatConversationMessage[], anchorId: string) => {
+      activeConversationIdRef.current = conversationId;
+      setActiveConversationId(conversationId);
+      threadMessagesRef.current = messages;
+      conversationHistoryRef.current = history;
+      setThreadMessages(messages);
+      setConversationHistory(history);
+      setPendingScrollToMessageId(anchorId);
+      setStreamingStatusMessage(null);
+      setShowBackToBottom(false);
+      setIsPinnedToBottom(true);
+      resizeTextarea();
+      refreshConversationQueries();
+    },
+    [refreshConversationQueries, resizeTextarea]
+  );
+
+  const openConversation = useCallback(
+    (conversationId: string) => {
+      const currentConversationId = activeConversationIdRef.current ?? selectedConversationId;
+      if (!conversationId || conversationId === currentConversationId) {
+        return;
+      }
+
+      if (isStreaming) {
+        const assistantId = activeAssistantIdRef.current;
+        const snapshotMessages = finalizeInterruptedThread(
+          threadMessagesRef.current,
+          assistantId,
+          streamContentRef.current
+        );
+        archiveThread(activeConversationIdRef.current ?? conversationId, snapshotMessages, conversationHistoryRef.current);
+        clearCurrentStream({ preserveThread: false });
+      } else if (threadMessagesRef.current.length > 0 && activeConversationIdRef.current) {
+        archiveThread(activeConversationIdRef.current, threadMessagesRef.current, conversationHistoryRef.current);
+      }
+
+      const cachedConversation = archivedThreads.find((thread) => thread.id === conversationId);
+      if (cachedConversation) {
+        hydrateConversation(
+          cachedConversation.id,
+          cachedConversation.messages.map((message) => ({ ...message })),
+          cachedConversation.conversationHistory.map((message) => ({ ...message })),
+          cachedConversation.sidebar.anchorId
+        );
+        return;
+      }
+
+      activeConversationIdRef.current = conversationId;
+      setActiveConversationId(conversationId);
+      threadMessagesRef.current = [];
+      conversationHistoryRef.current = [];
+      setThreadMessages([]);
+      setConversationHistory([]);
+      setPendingScrollToMessageId(null);
+      setStreamingStatusMessage(null);
+      setShowBackToBottom(false);
+      setIsPinnedToBottom(true);
+      resizeTextarea();
+      requestAnimationFrame(() => scrollThreadToBottom("auto"));
+    },
+    [archiveThread, archivedThreads, clearCurrentStream, hydrateConversation, isStreaming, resizeTextarea, scrollThreadToBottom, selectedConversationId]
   );
 
   const finalizeStream = useCallback(
@@ -338,30 +653,28 @@ function ChatWorkspace({ authReady, locationId }: { authReady: boolean; location
       }
 
       const assistantText = streamContentRef.current;
+      const nextMessages = threadMessagesRef.current.map((message) =>
+        message.id === assistantId
+          ? {
+              ...message,
+              content: assistantText.length > 0 ? assistantText : message.content,
+              status: options?.note ? "error" : undefined,
+              errorMessage: options?.note
+            }
+          : message
+      );
+      const nextHistory =
+        assistantText.trim().length > 0
+          ? [...conversationHistoryRef.current, { role: "assistant", content: assistantText }]
+          : conversationHistoryRef.current;
 
-      setThreadMessages((current) => {
-        const nextMessages = current.map((message) =>
-          message.id === assistantId
-            ? {
-                ...message,
-                content: assistantText.length > 0 ? assistantText : message.content,
-                status: options?.note ? "error" : undefined,
-                errorMessage: options?.note
-              }
-            : message
-        );
+      threadMessagesRef.current = nextMessages;
+      conversationHistoryRef.current = nextHistory;
+      setThreadMessages(nextMessages);
+      setConversationHistory(nextHistory);
 
-        return nextMessages;
-      });
-
-      if (assistantText.trim().length > 0) {
-        setConversationHistory((current) => [
-          ...current,
-          {
-            role: "assistant",
-            content: assistantText
-          }
-        ]);
+      if (activeConversationIdRef.current) {
+        archiveThread(activeConversationIdRef.current, nextMessages, nextHistory);
       }
 
       activeAssistantIdRef.current = null;
@@ -371,12 +684,44 @@ function ChatWorkspace({ authReady, locationId }: { authReady: boolean; location
       setStreamingStatusMessage(options?.note ?? null);
       setShowBackToBottom(false);
       setIsPinnedToBottom(true);
+      refreshConversationQueries();
     },
-    []
+    [archiveThread, refreshConversationQueries]
+  );
+
+  const appendToken = useCallback(
+    (token: string) => {
+      const assistantId = activeAssistantIdRef.current;
+      if (!assistantId) {
+        return;
+      }
+
+      streamContentRef.current += token;
+
+      const nextMessages = threadMessagesRef.current.map((message) =>
+        message.id === assistantId
+          ? {
+              ...message,
+              content: streamContentRef.current,
+              status: "streaming",
+              errorMessage: undefined
+            }
+          : message
+      );
+
+      threadMessagesRef.current = nextMessages;
+      setThreadMessages(nextMessages);
+      setStreamingStatusMessage(null);
+
+      if (isPinnedToBottom) {
+        requestAnimationFrame(() => scrollThreadToBottom("auto"));
+      }
+    },
+    [isPinnedToBottom, scrollThreadToBottom]
   );
 
   const openStream = useCallback(
-    async (nextMessage: string, assistantId: string, accessToken: string) => {
+    async (nextMessage: string, conversationId: string, assistantId: string, accessToken: string) => {
       if (!locationId) {
         return;
       }
@@ -398,7 +743,8 @@ function ChatWorkspace({ authReady, locationId }: { authReady: boolean; location
       try {
         const response = await sendChatMessage(locationId, accessToken, {
           message: nextMessage,
-          conversationHistory: [],
+          conversationId,
+          conversationHistory: conversationHistoryRef.current,
           signal: controller.signal
         });
         const contentType = response.headers.get("content-type");
@@ -462,13 +808,7 @@ function ChatWorkspace({ authReady, locationId }: { authReady: boolean; location
 
       let accessToken: string | null = null;
       try {
-        const supabase = createSupabaseBrowserClient();
-        if (!supabase) {
-          setStreamingStatusMessage("Response interrupted — try again");
-          return;
-        }
-
-        accessToken = await getBackendAccessToken(supabase, "chat-stream");
+        accessToken = await getChatAccessToken("chat-send");
       } catch {
         accessToken = null;
       }
@@ -478,61 +818,69 @@ function ChatWorkspace({ authReady, locationId }: { authReady: boolean; location
         return;
       }
 
-      const nextThreadId = threadId ?? createId();
+      const conversationId = activeConversationIdRef.current ?? selectedConversationId ?? createId();
       const userMessageId = createId();
       const assistantMessageId = createId();
       const startedAt = new Date().toISOString();
-
-      setThreadId(nextThreadId);
-      setConversationHistory((current) => [...current, { role: "user", content: trimmed }]);
-      setInputValue("");
-      resizeTextarea();
-      setThreadMessages((current) => [
-        ...current,
+      const nextHistory = [...conversationHistoryRef.current, { role: "user", content: trimmed }];
+      const nextMessages: ThreadMessage[] = [
+        ...threadMessagesRef.current,
         {
           id: userMessageId,
+          conversationId,
           role: "user",
           content: trimmed,
           createdAt: startedAt
         },
         {
           id: assistantMessageId,
+          conversationId,
           role: "assistant",
           content: "",
           createdAt: startedAt,
           status: "streaming"
         }
-      ]);
+      ];
+
+      activeConversationIdRef.current = conversationId;
+      setActiveConversationId(conversationId);
+      conversationHistoryRef.current = nextHistory;
+      threadMessagesRef.current = nextMessages;
+      setConversationHistory(nextHistory);
+      setThreadMessages(nextMessages);
+      setInputValue("");
+      resizeTextarea();
+      setPendingScrollToMessageId(null);
       requestAnimationFrame(() => scrollThreadToBottom("auto"));
-      void openStream(trimmed, assistantMessageId, accessToken);
+      void openStream(trimmed, conversationId, assistantMessageId, accessToken);
     },
-    [authReady, isStreaming, locationId, openStream, resizeTextarea, scrollThreadToBottom, threadId]
+    [authReady, isStreaming, locationId, openStream, resizeTextarea, scrollThreadToBottom, selectedConversationId]
   );
 
   const handlePromptClick = useCallback(
     (prompt: string) => {
       setInputValue(prompt);
-      submitMessage(prompt);
+      void submitMessage(prompt);
     },
     [submitMessage]
   );
 
   const handleNewConversation = useCallback(() => {
-    if (isStreaming) {
-      streamStoppedRef.current = true;
-      streamClosedRef.current = true;
-      activeAbortControllerRef.current?.abort();
-      activeAbortControllerRef.current = null;
-      activeAssistantIdRef.current = null;
-      streamContentRef.current = "";
-      setIsStreaming(false);
+    const nextConversationId = createId();
+    const currentMessages = threadMessagesRef.current;
+
+    if (currentMessages.length > 0 && activeConversationIdRef.current) {
+      const snapshotMessages = isStreaming
+        ? finalizeInterruptedThread(currentMessages, activeAssistantIdRef.current, streamContentRef.current)
+        : currentMessages;
+      archiveThread(activeConversationIdRef.current, snapshotMessages, conversationHistoryRef.current);
     }
 
-    if (threadId && threadMessages.length > 0) {
-      archiveThread(threadId, threadMessages, conversationHistory);
-    }
-
-    setThreadId(null);
+    clearCurrentStream({ preserveThread: false });
+    activeConversationIdRef.current = nextConversationId;
+    setActiveConversationId(nextConversationId);
+    threadMessagesRef.current = [];
+    conversationHistoryRef.current = [];
     setThreadMessages([]);
     setConversationHistory([]);
     setInputValue("");
@@ -544,26 +892,13 @@ function ChatWorkspace({ authReady, locationId }: { authReady: boolean; location
     requestAnimationFrame(() => {
       textareaRef.current?.focus();
     });
-  }, [archiveThread, conversationHistory, isStreaming, resizeTextarea, threadId, threadMessages]);
+  }, [archiveThread, clearCurrentStream, isStreaming, resizeTextarea]);
 
   const handleHistorySelect = useCallback(
-    (selectedThreadId: string) => {
-      const selectedThread = archivedThreads.find((thread) => thread.id === selectedThreadId);
-      if (!selectedThread) {
-        return;
-      }
-
-      setThreadId(selectedThread.id);
-      setThreadMessages(selectedThread.messages.map((message) => ({ ...message })));
-      setConversationHistory(selectedThread.conversationHistory.map((message) => ({ ...message })));
-      setPendingScrollToMessageId(selectedThread.sidebar.anchorId);
-      setInputValue("");
-      setShowBackToBottom(false);
-      setIsPinnedToBottom(true);
-      resizeTextarea();
-      requestAnimationFrame(() => scrollThreadToBottom("auto"));
+    (selectedConversationId: string) => {
+      openConversation(selectedConversationId);
     },
-    [archivedThreads, resizeTextarea, scrollThreadToBottom]
+    [openConversation]
   );
 
   const handleThreadScroll = useCallback(() => {
@@ -579,51 +914,71 @@ function ChatWorkspace({ authReady, locationId }: { authReady: boolean; location
   }, [isStreaming]);
 
   const handleStopGenerating = useCallback(() => {
-    if (!isStreaming) {
+    clearCurrentStream({ preserveThread: true });
+    refreshConversationQueries();
+  }, [clearCurrentStream, refreshConversationQueries]);
+
+  const pastConversationsPanel = (
+    <div className="space-y-4 text-white">
+      <div className="flex items-center justify-between px-2">
+        <h2 className="text-sm font-medium uppercase tracking-wide text-white/40">Past conversations</h2>
+        <span className="text-xs text-white/40">{sidebarConversations.length}</span>
+      </div>
+
+      {conversationsError ? (
+        <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-white/60">{conversationsError}</div>
+      ) : conversationsQuery.isLoading ? (
+        <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-white/60">
+          Loading conversation history...
+        </div>
+      ) : sidebarConversations.length > 0 ? (
+        <div role="tablist" aria-label="Past conversations" className="space-y-2">
+          {sidebarConversations.map((conversation) => (
+            <ChatSidebarConversationItem
+              key={`${conversation.id}-${conversation.anchorId}`}
+              conversation={conversation}
+              active={conversation.id === selectedConversationId}
+              onSelect={handleHistorySelect}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-2xl border border-dashed border-white/10 bg-white/5 p-4 text-sm text-white/60">
+          Recent conversations will appear here after you send a message.
+        </div>
+      )}
+    </div>
+  );
+
+  useEffect(() => {
+    const loadedMessages = activeConversationHistoryQuery.data;
+    if (!loadedMessages || threadMessagesRef.current.length > 0) {
       return;
     }
 
-    streamStoppedRef.current = true;
-    streamClosedRef.current = true;
-    activeAbortControllerRef.current?.abort();
-    activeAbortControllerRef.current = null;
-    setIsStreaming(false);
+    const nextMessages = loadedMessages.map(toThreadMessage);
+    const nextHistory = messageHistoryFromThread(nextMessages);
+    threadMessagesRef.current = nextMessages;
+    conversationHistoryRef.current = nextHistory;
+    setThreadMessages(nextMessages);
+    setConversationHistory(nextHistory);
+    setPendingScrollToMessageId(nextMessages[0]?.id ?? null);
 
-    const assistantId = activeAssistantIdRef.current;
+    if (activeConversationIdRef.current) {
+      archiveThread(activeConversationIdRef.current, nextMessages, nextHistory);
+    }
+  }, [activeConversationHistoryQuery.data, archiveThread]);
 
-    if (assistantId) {
-      setThreadMessages((current) => {
-        const nextMessages: ThreadMessage[] = [];
-
-        current.forEach((message) => {
-          if (message.id !== assistantId) {
-            nextMessages.push(message);
-            return;
-          }
-
-          const partialContent = streamContentRef.current || message.content;
-          if (partialContent.trim().length === 0) {
-            return;
-          }
-
-          nextMessages.push({
-            ...message,
-            content: partialContent,
-            status: undefined,
-            errorMessage: undefined
-          });
-        });
-
-        return nextMessages;
-      });
+  useEffect(() => {
+    if (!activeConversationHistoryQuery.isError || threadMessagesRef.current.length > 0) {
+      return;
     }
 
-    activeAssistantIdRef.current = null;
-    streamContentRef.current = "";
-    setStreamingStatusMessage(null);
-    setShowBackToBottom(false);
-    setIsPinnedToBottom(true);
-  }, [isStreaming]);
+    setThreadMessages([]);
+    setConversationHistory([]);
+    threadMessagesRef.current = [];
+    conversationHistoryRef.current = [];
+  }, [activeConversationHistoryQuery.isError]);
 
   useEffect(() => {
     return () => {
@@ -682,87 +1037,6 @@ function ChatWorkspace({ authReady, locationId }: { authReady: boolean; location
     </div>
   );
 
-  const renderSidebar = () => (
-    <aside className="hidden w-80 shrink-0 border-r border-white/10 bg-primary text-white lg:flex lg:flex-col">
-      <div className="flex h-full min-h-0 flex-col">
-        <div className="flex items-center justify-between border-b border-white/10 px-4 py-4">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
-              <MessageSquareText className="h-5 w-5" aria-hidden="true" />
-            </span>
-            <div>
-              <p className="text-sm font-semibold text-white">PharmaCast</p>
-              <p className="text-xs text-white/60">Inventory chat</p>
-            </div>
-          </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="New conversation"
-            onClick={handleNewConversation}
-            className="text-white hover:bg-white/10 hover:text-white"
-          >
-            <Plus className="h-4 w-4" aria-hidden="true" />
-          </Button>
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
-          <div className="space-y-1">
-            {productNavigation.map((item) => {
-              const active = item.href === "/chat";
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  aria-current={active ? "page" : undefined}
-                  className={cn(
-                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-white/72 transition-colors hover:bg-white/10 hover:text-white",
-                    active && "bg-white/12 text-white"
-                  )}
-                >
-                  <item.icon className="h-4 w-4" aria-hidden="true" />
-                  {item.name}
-                </Link>
-              );
-            })}
-          </div>
-
-          <div className="mt-8">
-            <div className="mb-3 flex items-center justify-between px-2">
-              <h2 className="text-sm font-medium uppercase tracking-wide text-white/40">History</h2>
-              <span className="text-xs text-white/40">{sidebarHistory.length}</span>
-            </div>
-
-            {sidebarHistory.length > 0 ? (
-              <div className="space-y-2">
-                {sidebarHistory.map((conversation) => (
-                  <button
-                    key={`${conversation.id}-${conversation.anchorId}`}
-                    type="button"
-                    onClick={() => handleHistorySelect(conversation.id)}
-                    className="w-full rounded-2xl border border-transparent px-3 py-3 text-left transition hover:border-white/10 hover:bg-white/10"
-                  >
-                    <div className="text-sm font-medium text-white">{conversation.title}</div>
-                    <div className="mt-1 line-clamp-2 text-xs leading-5 text-white/70">{conversation.preview}</div>
-                    <div className="mt-2 flex items-center gap-1 text-[11px] text-white/40">
-                      <Clock3 className="h-3 w-3" aria-hidden="true" />
-                      {formatTimestamp(conversation.createdAt)}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-2xl border border-dashed border-white/10 bg-white/5 p-4 text-sm text-white/60">
-                Recent conversations will appear here after you send a message.
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    </aside>
-  );
-
   if (!locationId) {
     return (
       <div className="flex h-[calc(100dvh-7.5rem)] flex-col overflow-hidden lg:h-[calc(100dvh-4rem)]">
@@ -777,10 +1051,16 @@ function ChatWorkspace({ authReady, locationId }: { authReady: boolean; location
     );
   }
 
+  const sidebarFallback = chatSidebarSlot ? null : (
+    <aside className="hidden w-64 shrink-0 border-r border-white/10 bg-primary text-white lg:flex lg:flex-col">
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">{pastConversationsPanel}</div>
+    </aside>
+  );
+
   return (
     <div className="flex h-[calc(100dvh-7.5rem)] min-h-0 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm lg:h-[calc(100dvh-4rem)]">
-      {renderSidebar()}
-
+      {sidebarFallback}
+      {chatSidebarSlot ? createPortal(pastConversationsPanel, chatSidebarSlot) : null}
       <section className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(15,31,61,0.06),_transparent_42%)]">
         <div className="flex items-center justify-between border-b border-slate-200 bg-white/80 px-4 py-4 backdrop-blur md:px-6">
           <div>
@@ -800,30 +1080,44 @@ function ChatWorkspace({ authReady, locationId }: { authReady: boolean; location
 
         <div ref={threadScrollRef} onScroll={handleThreadScroll} className="relative min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-6">
           <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
-            {threadIsEmpty ? (
+            {conversationLoading ? (
+              <div className="absolute inset-0 flex items-center justify-center px-4">
+                <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                  <Loader2 className="h-4 w-4 animate-spin text-pharma-teal" aria-hidden="true" />
+                  <span className="text-sm text-slate-600">Loading conversation history...</span>
+                </div>
+              </div>
+            ) : null}
+
+            {!conversationLoading && threadIsEmpty ? (
               <div className="absolute inset-0 flex items-center justify-center px-4">
                 <div className="w-full max-w-3xl rounded-3xl border border-slate-200 bg-white/95 p-6 shadow-lg backdrop-blur">
                   <div className="mb-6">
                     <div className="text-sm font-medium uppercase tracking-wide text-slate-400">Suggested prompts</div>
                     <h2 className="mt-2 text-xl font-semibold text-slate-900">Start with a quick inventory question</h2>
-                    <p className="mt-1 text-sm text-slate-500">
-                      These suggestions are tailored for a fresh conversation.
-                    </p>
+                    <p className="mt-1 text-sm text-slate-500">These suggestions are tailored for a fresh conversation.</p>
                   </div>
                   {renderPromptGrid()}
                 </div>
               </div>
             ) : null}
 
-            {activeThreadMessages.map((message) => (
-              <ChatBubble
-                key={message.id}
-                message={message}
-                registerRef={(messageId, node) => {
-                  messageRefs.current.set(messageId, node);
-                }}
-              />
-            ))}
+            {!conversationLoading &&
+              activeThreadMessages.map((message) => (
+                <ChatBubble
+                  key={message.id}
+                  message={message}
+                  registerRef={(messageId, node) => {
+                    messageRefs.current.set(messageId, node);
+                  }}
+                />
+              ))}
+
+            {conversationHistoryError ? (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {conversationHistoryError}
+              </div>
+            ) : null}
 
             {showBackToBottom ? (
               <div className="sticky bottom-4 z-10 flex justify-end">
@@ -851,7 +1145,7 @@ function ChatWorkspace({ authReady, locationId }: { authReady: boolean; location
               className="space-y-3"
               onSubmit={(event) => {
                 event.preventDefault();
-                submitMessage(inputValue);
+                void submitMessage(inputValue);
               }}
             >
               <div className="rounded-3xl border border-slate-200 bg-white p-3 shadow-sm">
@@ -883,7 +1177,7 @@ function ChatWorkspace({ authReady, locationId }: { authReady: boolean; location
 
                     if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
                       event.preventDefault();
-                      submitMessage(inputValue);
+                      void submitMessage(inputValue);
                     }
                   }}
                   className="min-h-11 resize-none border-0 bg-transparent px-0 py-0 text-sm shadow-none focus-visible:ring-0"

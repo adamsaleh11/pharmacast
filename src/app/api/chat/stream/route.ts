@@ -82,6 +82,7 @@ export async function GET(request: NextRequest) {
     },
     body: JSON.stringify({
       message: payload.message,
+      conversation_id: payload.conversationId,
       conversation_history: payload.conversationHistory
     })
   });

@@ -37,6 +37,7 @@ export function deserializeChatStreamPayload(value: string): ChatStreamPayload |
     if (
       !parsed ||
       typeof parsed.locationId !== "string" ||
+      typeof parsed.conversationId !== "string" ||
       typeof parsed.message !== "string" ||
       !Array.isArray(parsed.conversationHistory)
     ) {

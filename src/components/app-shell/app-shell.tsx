@@ -8,6 +8,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { productNavigation } from "@/components/app-shell/navigation";
 import { acknowledgeBackendLogout } from "@/lib/api/auth";
+import { setChatSidebarSlot } from "@/lib/chat-sidebar-slot";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { useAppContext } from "@/providers/app-context";
@@ -39,18 +40,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      {!isChatRoute ? (
-        <aside className="fixed inset-y-0 left-0 hidden w-64 border-r border-slate-200 bg-primary text-white lg:flex lg:flex-col">
-          <Link href="/dashboard" className="flex h-16 items-center gap-3 border-b border-white/10 px-5">
-            <span className="flex h-9 w-9 items-center justify-center rounded-md bg-pharma-teal">
-              <Pill className="h-5 w-5" aria-hidden="true" />
-            </span>
-            <span>
-              <span className="block text-sm font-semibold">PharmaCast</span>
-              <span className="block text-xs text-white/60">Inventory intelligence</span>
-            </span>
-          </Link>
-          <nav aria-label="Primary navigation" className="flex-1 space-y-1 px-3 py-4">
+      <aside className="fixed inset-y-0 left-0 hidden w-64 border-r border-slate-200 bg-primary text-white lg:flex lg:flex-col">
+        <Link href="/dashboard" className="flex h-16 items-center gap-3 border-b border-white/10 px-5">
+          <span className="flex h-9 w-9 items-center justify-center rounded-md bg-pharma-teal">
+            <Pill className="h-5 w-5" aria-hidden="true" />
+          </span>
+          <span>
+            <span className="block text-sm font-semibold">PharmaCast</span>
+            <span className="block text-xs text-white/60">Inventory intelligence</span>
+          </span>
+        </Link>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <nav aria-label="Primary navigation" className="space-y-1 px-3 py-4">
             {productNavigation.map((item) => {
               const active = pathname === item.href;
               return (
@@ -69,10 +70,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               );
             })}
           </nav>
-        </aside>
-      ) : null}
+          {isChatRoute ? <div ref={setChatSidebarSlot} className="border-t border-white/10 px-3 py-4" /> : null}
+        </div>
+      </aside>
 
-      <div className={cn(!isChatRoute && "lg:pl-64")}>
+      <div className="lg:pl-64">
         <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-slate-200 bg-white/95 px-4 backdrop-blur lg:px-6">
           <div className="flex items-center gap-3">
             <Button className="lg:hidden" variant="ghost" size="icon" aria-label="Open navigation">

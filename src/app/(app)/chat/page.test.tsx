@@ -3,7 +3,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ChatPage from "./page";
-import { sendChatMessage } from "@/lib/api/chat";
+import { listChatConversationHistory, listChatConversations, sendChatMessage } from "@/lib/api/chat";
 
 let mockAppContext = {
   authReady: true,
@@ -29,11 +29,15 @@ vi.mock("@/lib/api/chat", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api/chat")>("@/lib/api/chat");
   return {
     ...actual,
-    sendChatMessage: vi.fn()
+    sendChatMessage: vi.fn(),
+    listChatConversations: vi.fn(),
+    listChatConversationHistory: vi.fn()
   };
 });
 
 const mockSendChatMessage = vi.mocked(sendChatMessage);
+const mockListChatConversations = vi.mocked(listChatConversations);
+const mockListChatConversationHistory = vi.mocked(listChatConversationHistory);
 
 function renderChatPage() {
   const queryClient = new QueryClient({
@@ -84,6 +88,8 @@ beforeEach(() => {
     }
   };
   mockSendChatMessage.mockReset();
+  mockListChatConversations.mockReset();
+  mockListChatConversationHistory.mockReset();
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     callback(0);
     return 0;
@@ -97,24 +103,63 @@ afterEach(() => {
 
 describe("Chat route", () => {
   it("starts a fresh chat without loading prior history", async () => {
+    mockListChatConversations.mockResolvedValue([]);
+
     renderChatPage();
 
     expect(await screen.findByRole("heading", { name: "Chat" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Dashboard" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Insights" })).toBeInTheDocument();
     expect(screen.getByText("Start with a quick inventory question")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Loading conversation history...")).not.toBeInTheDocument());
     expect(screen.getByText("Recent conversations will appear here after you send a message.")).toBeInTheDocument();
-    expect(screen.queryByText("Loading chat history...")).not.toBeInTheDocument();
+    expect(mockListChatConversations).toHaveBeenCalledWith("location-1", "access-token");
+    expect(mockListChatConversationHistory).not.toHaveBeenCalled();
   });
 
-  it("archives a finished thread locally and can reopen it from the sidebar", async () => {
-    const user = userEvent.setup();
-    const stream = createStreamingResponse();
-    mockSendChatMessage.mockResolvedValue(stream.response);
+  it("hydrates a saved conversation from the sidebar", async () => {
+    mockListChatConversations.mockResolvedValue([
+      {
+        conversation_id: "conversation-1",
+        location_id: "location-1",
+        user_id: "user-1",
+        started_at: "2026-04-21T10:00:00Z",
+        last_message_at: "2026-04-21T10:05:00Z",
+        message_count: 2
+      }
+    ]);
+    mockListChatConversationHistory.mockResolvedValue([
+      {
+        id: "message-1",
+        conversation_id: "conversation-1",
+        user_id: "user-1",
+        role: "user",
+        content: "What should I order?",
+        created_at: "2026-04-21T10:00:00Z"
+      },
+      {
+        id: "message-2",
+        conversation_id: "conversation-1",
+        user_id: "user-1",
+        role: "assistant",
+        content: "Order 10 units of amoxicillin.",
+        created_at: "2026-04-21T10:00:01Z"
+      }
+    ]);
 
     renderChatPage();
 
-    expect(await screen.findByText("Start with a quick inventory question")).toBeInTheDocument();
+    expect(await screen.findByText("What should I order?")).toBeInTheDocument();
+    expect(await screen.findByText("Order 10 units of amoxicillin.")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /2 messages/i })).toBeInTheDocument();
+    expect(mockListChatConversationHistory).toHaveBeenCalledWith("location-1", "conversation-1", "access-token");
+  });
+
+  it("sends chat requests with a conversation_id", async () => {
+    const user = userEvent.setup();
+    const stream = createStreamingResponse();
+    mockListChatConversations.mockResolvedValue([]);
+    mockSendChatMessage.mockResolvedValue(stream.response);
+
+    renderChatPage();
 
     const promptButton = await screen.findByRole("button", {
       name: /Which drugs should I reorder this week\?/i
@@ -126,7 +171,8 @@ describe("Chat route", () => {
       "location-1",
       "access-token",
       expect.objectContaining({
-        message: "Which drugs should I reorder this week?"
+        message: "Which drugs should I reorder this week?",
+        conversationId: expect.any(String)
       })
     );
 
@@ -140,22 +186,12 @@ describe("Chat route", () => {
     });
 
     expect((await screen.findAllByText(/Amoxicillin should be reordered\./)).length).toBeGreaterThan(0);
-
-    await user.click(screen.getAllByRole("button", { name: "New conversation" })[1]);
-
-    const archivedPreview = await screen.findByText("Amoxicillin should be reordered.");
-    const archivedThreadButton = archivedPreview.closest("button");
-    expect(archivedThreadButton).not.toBeNull();
-
-    await user.click(archivedThreadButton as HTMLButtonElement);
-
-    expect((await screen.findAllByText("Which drugs should I reorder this week?")).length).toBeGreaterThan(0);
-    expect((await screen.findAllByText(/Amoxicillin should be reordered\./)).length).toBeGreaterThan(0);
   });
 
   it("stops generation without marking an intentional cancel as an error", async () => {
     const user = userEvent.setup();
     const stream = createStreamingResponse();
+    mockListChatConversations.mockResolvedValue([]);
     mockSendChatMessage.mockResolvedValue(stream.response);
 
     renderChatPage();

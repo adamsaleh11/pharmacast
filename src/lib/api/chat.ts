@@ -1,11 +1,31 @@
 import { ApiError, createApiClient } from "@/lib/api/client";
 import { getPublicEnv } from "@/lib/env";
-import type { ChatConversationMessage, ChatMessageResponse } from "@/types/chat";
+import type {
+  ChatConversationMessage,
+  ChatConversationResponse,
+  ChatMessageResponse
+} from "@/types/chat";
 
 const apiClient = createApiClient();
 
 export function chatHistoryQueryKey(locationId: string | null | undefined) {
   return ["chat-history", locationId] as const;
+}
+
+export function chatConversationsQueryKey(locationId: string | null | undefined) {
+  return ["chat-conversations", locationId] as const;
+}
+
+export function chatConversationHistoryQueryKey(locationId: string | null | undefined, conversationId: string | null | undefined) {
+  return ["chat-conversation-history", locationId, conversationId] as const;
+}
+
+export function listChatConversations(locationId: string, accessToken: string) {
+  return apiClient.get<ChatConversationResponse[]>(`/locations/${locationId}/chat/conversations`, { accessToken });
+}
+
+export function listChatConversationHistory(locationId: string, conversationId: string, accessToken: string) {
+  return apiClient.get<ChatMessageResponse[]>(`/locations/${locationId}/chat/${conversationId}/history`, { accessToken });
 }
 
 export function listChatHistory(locationId: string, accessToken: string) {
@@ -17,6 +37,7 @@ export async function sendChatMessage(
   accessToken: string,
   body: {
     message: string;
+    conversationId: string;
     conversationHistory?: ChatConversationMessage[];
     signal?: AbortSignal;
   }
@@ -37,6 +58,7 @@ export async function sendChatMessage(
     signal: body.signal,
     body: JSON.stringify({
       message: body.message,
+      conversation_id: body.conversationId,
       conversation_history: body.conversationHistory ?? []
     })
   });
