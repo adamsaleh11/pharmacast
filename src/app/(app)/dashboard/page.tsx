@@ -815,7 +815,7 @@ export default function DashboardPage() {
                     <th className={cn("w-44 px-4 py-3 font-medium", pulseStockHeader && "animate-pulse bg-amber-100")}>
                       Stock
                     </th>
-                    <th className="w-44 px-4 py-3 font-medium">Forecast · 30D</th>
+                    <th className="w-44 px-4 py-3 font-medium">Forecast · {horizonDays}d</th>
                     <th className="w-36 px-4 py-3 font-medium">Confidence</th>
                     <th className="w-36 px-4 py-3 font-medium">Last Generated</th>
                     <th className="w-56 px-4 py-3 font-medium">Actions</th>
@@ -1144,16 +1144,9 @@ function ForecastTableRow({
   const status = normalizedReorderStatus(row.forecast?.reorder_status);
   const discontinued = isDiscontinuedStatus(row.drugStatus);
 
-  const sparklineQuery = useQuery({
-    queryKey: drugDetailQueryKey(locationId, row.din),
-    enabled: Boolean(locationId && row.forecast),
-    staleTime: 5 * 60 * 1000,
-    queryFn: async () => {
-      const accessToken = await getDashboardAccessToken("dashboard-sparkline");
-      return getDrugDetail(locationId!, row.din, accessToken);
-    }
-  });
-  const sparklineData = sparklineQuery.data?.dispensing_history.slice(-12).map((d) => d.quantity) ?? null;
+  // Note: sparklineQuery disabled in favor of graph_points from forecast API
+  // If graph_points is not available, sparklineData will be null (fallback to placeholder)
+  const sparklineData = null;
   const explanation = useForecastExplanation({
     locationId,
     din: row.forecast ? row.din : null,
@@ -1499,6 +1492,20 @@ function ForecastCell({
   const status = normalizedReorderStatus(row.forecast?.reorder_status);
   const color = status && status in STATUS_COLORS ? STATUS_COLORS[status as keyof typeof STATUS_COLORS].hex : "#94a3b8";
 
+  // Use graph_points from forecast if available, otherwise fall back to sparklineData
+  const graphData = row.forecast?.graph_points ?? sparklineData;
+
+  // Debug: Log missing graph_points
+  if (row.forecast && !row.forecast.graph_points && typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
+    console.warn(`[DEBUG] No graph_points for ${row.din}:`, {
+      din: row.din,
+      has_graph_points: !!row.forecast.graph_points,
+      graph_points_value: row.forecast.graph_points,
+      predicted_quantity: row.forecast.predicted_quantity,
+      horizonDays
+    });
+  }
+
   if (generating) {
     return <Loader2 className="h-4 w-4 animate-spin text-pharma-teal" aria-hidden="true" />;
   }
@@ -1513,10 +1520,10 @@ function ForecastCell({
         <span className="text-lg font-bold text-slate-900">{row.forecast.predicted_quantity}</span>
         <span className="ml-1 text-muted-foreground">/ {horizonDays}d</span>
       </div>
-      {sparklineData && sparklineData.length >= 2 ? (
-        <Sparkline data={sparklineData} color={color} />
+      {graphData && graphData.length >= 2 ? (
+        <Sparkline data={graphData} color={color} />
       ) : (
-        <div className="h-7 w-20 rounded bg-slate-100" aria-hidden="true" />
+        <div className="h-7 w-20 rounded bg-slate-100" title={`No graph data available${graphData ? ` (${graphData.length} points)` : ''}`} aria-hidden="true" />
       )}
     </div>
   );

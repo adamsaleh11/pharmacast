@@ -170,6 +170,38 @@ describe("forecast dashboard model", () => {
     ).toThrow(/prophet_lower/);
   });
 
+  it("includes graph_points when present in forecast summary", () => {
+    expect(
+      normalizeForecastSummary({
+        din: "00012345",
+        predicted_quantity: 140,
+        confidence: "HIGH",
+        days_of_supply: 7.2,
+        reorder_status: "GREEN",
+        generated_at: "2026-04-20T12:00:00Z",
+        graph_points: [20, 20, 20, 20, 20, 20, 20]
+      })
+    ).toMatchObject({
+      din: "00012345",
+      predicted_quantity: 140,
+      graph_points: [20, 20, 20, 20, 20, 20, 20]
+    });
+
+    expect(
+      normalizeForecastSummary({
+        din: "00067890",
+        predicted_quantity: 50,
+        confidence: "MEDIUM",
+        days_of_supply: 5.0,
+        reorder_status: "RED",
+        generated_at: "2026-04-20T12:00:00Z"
+      })
+    ).toMatchObject({
+      din: "00067890",
+      graph_points: null
+    });
+  });
+
   it("preserves model metadata when a generated forecast is merged into a summary row", () => {
     expect(
       forecastResultToSummary({

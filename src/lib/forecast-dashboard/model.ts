@@ -91,6 +91,15 @@ function readThresholdField(value: Record<string, unknown>) {
   };
 }
 
+function readGraphPointsField(value: Record<string, unknown>) {
+  const candidate = value.graph_points;
+  if (!Array.isArray(candidate)) {
+    return null;
+  }
+  const points = candidate.filter((p) => typeof p === "number" && Number.isFinite(p));
+  return points.length > 0 ? points : null;
+}
+
 export function normalizeForecastSummary(value: unknown, context = "Forecast response"): ForecastSummaryDto {
   if (!isRecord(value)) {
     throw new Error(`${context} must be an object.`);
@@ -108,7 +117,8 @@ export function normalizeForecastSummary(value: unknown, context = "Forecast res
     generated_at: readStringField(value, "generated_at", context),
     current_stock: readNullableNumberField(value, "current_stock"),
     stock_entered: readBooleanField(value, "stock_entered"),
-    threshold: readThresholdField(value)
+    threshold: readThresholdField(value),
+    graph_points: readGraphPointsField(value)
   };
 }
 

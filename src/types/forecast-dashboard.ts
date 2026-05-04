@@ -22,6 +22,7 @@ export type ForecastSummaryDto = {
   current_stock: number | null;
   stock_entered: boolean;
   threshold?: ForecastThresholdDto | null;
+  graph_points?: number[] | null;
 };
 
 export type ForecastListResponse = {
