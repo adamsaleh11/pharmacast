@@ -36,7 +36,7 @@ export type DrugDetailForecastDto = {
   prophet_lower: number;
   prophet_upper: number;
   avg_daily_demand: number;
-  reorder_point: number;
+  reorder_point: number | null;
   data_points_used: number;
 };
 

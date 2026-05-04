@@ -39,3 +39,33 @@
     @apply bg-background font-sans text-foreground antialiased;
   }
 }
+
+@layer utilities {
+  @keyframes slideIn {
+    from {
+      transform: translateX(24px);
+      opacity: 0;
+    }
+    to {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+
+  @keyframes urgentPulse {
+    0%, 100% {
+      box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.7);
+    }
+    50% {
+      box-shadow: 0 0 0 10px rgba(220, 38, 38, 0);
+    }
+  }
+
+  .animate-slideIn {
+    animation: slideIn 320ms ease-out;
+  }
+
+  .animate-urgentPulse {
+    animation: urgentPulse 2s infinite;
+  }
+}

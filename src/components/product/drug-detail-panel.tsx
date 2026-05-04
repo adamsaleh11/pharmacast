@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, Check, ChevronRight, Edit3, Info, Loader2, Sparkles, TriangleAlert, X } from "lucide-react";
+import { AlertCircle, Check, ChevronRight, Edit3, Info, Loader2, RefreshCw, Sparkles, TrendingDown, TrendingUp, TriangleAlert, X } from "lucide-react";
+import { ComposedChart, Area, Line, ReferenceArea, ReferenceDot, CartesianGrid, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { ConfidenceBadge } from "@/components/product/confidence-badge";
 import { ForecastExplanation } from "@/components/product/forecast-explanation";
 import { LoadingSpinner } from "@/components/product/loading-spinner";
@@ -11,13 +12,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError } from "@/lib/api/client";
 import { createStockAdjustment, drugDetailQueryKey, getDrugDetail, resetDrugThreshold, upsertDrugThreshold } from "@/lib/api/drug-detail";
-import { explanationQueryKey, generateForecast } from "@/lib/api/forecast-dashboard";
+import { explanationQueryKey, generateForecast, upsertCurrentStock } from "@/lib/api/forecast-dashboard";
 import { normalizeDin } from "@/lib/api/drugs";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getBackendAccessToken } from "@/lib/supabase/session";
@@ -97,6 +98,20 @@ function formatWeekLabel(value: string) {
   return Number.isNaN(date.getTime())
     ? value
     : date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function HydrationSafeRelativeTime({ timestamp }: { timestamp: string }) {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted) {
+    return <span>Just now</span>;
+  }
+
+  return <span>{formatRelativeTime(timestamp)}</span>;
 }
 
 function isDiscontinuedStatus(status: string | null | undefined) {
@@ -193,6 +208,7 @@ export function DrugDetailPanel({
   const [stockDraft, setStockDraft] = useState("");
   const [stockError, setStockError] = useState<string | null>(null);
   const [stockSaved, setStockSaved] = useState(false);
+  const [poDialogOpen, setPoDialogOpen] = useState(false);
   const stockInputRef = useRef<HTMLInputElement>(null);
 
   const detailQuery = useQuery({
@@ -263,7 +279,7 @@ export function DrugDetailPanel({
     }
   });
 
-  const actualSeries = useMemo(() => sortWeeklyHistory(history ?? []).slice(-12), [history]);
+  const actualSeries = useMemo(() => sortWeeklyHistory(history ?? []), [history]);
   const forecastSeries = useMemo(() => (detail ? buildForecastSeries(detail) : []), [detail]);
   const explanation = useForecastExplanation({
     locationId,
@@ -375,7 +391,8 @@ export function DrugDetailPanel({
     setAdjustmentError(null);
 
     try {
-      const response = await adjustmentMutation.mutateAsync({ adjustment_quantity: quantity, note });
+      const fullNote = `${adjustmentReason}: ${note}`;
+      const response = await adjustmentMutation.mutateAsync({ adjustment_quantity: quantity, note: fullNote });
       prependDrugDetailAdjustment(queryClient, locationId, selectedDin, response.adjustment);
       adjustmentQuantityRef.current!.value = "";
       adjustmentNoteRef.current!.value = "";
@@ -389,6 +406,7 @@ export function DrugDetailPanel({
   const adjustmentNoteRef = useRef<HTMLTextAreaElement>(null);
   const [adjustmentFeedback, setAdjustmentFeedback] = useState<string | null>(null);
   const [adjustmentError, setAdjustmentError] = useState<string | null>(null);
+  const [adjustmentReason, setAdjustmentReason] = useState<string>("Cycle count");
 
   useEffect(() => {
     if (!adjustmentFeedback) {
@@ -410,19 +428,69 @@ export function DrugDetailPanel({
       <Badge variant="muted">No forecast</Badge>
     );
 
+  const reorderStatusColor = forecast?.reorder_status === "RED" ? "bg-red-600" : forecast?.reorder_status === "AMBER" ? "bg-amber-600" : "bg-teal-600";
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="flex h-full w-full flex-col p-0 sm:w-[480px] sm:max-w-[480px]">
+      <SheetContent side="right" className="flex h-full w-full flex-col p-0 max-w-[760px] animate-slideIn">
         <div className="flex h-full min-h-0 flex-col">
-          <div className="border-b border-border px-4 py-4 sm:px-5">
-            <SheetHeader className="space-y-3">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0 space-y-1">
-                  <SheetTitle className="text-xl">
-                    {detail ? `${detail.drug.name} ${detail.drug.strength}` : "Drug detail"}
-                  </SheetTitle>
-                  <p className="font-mono text-xs text-muted-foreground">{selectedDin ?? "—"}</p>
+          {/* Phase 1: Header with colored pill icon, drug name, status badge */}
+          <div className="border-b border-border px-5 py-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex min-w-0 gap-4">
+                {/* Colored pill icon */}
+                <div
+                  data-testid="reorder-status-pill"
+                  className={cn("h-12 w-12 shrink-0 rounded-xl", reorderStatusColor)}
+                  aria-hidden="true"
+                />
+                <div className="min-w-0 space-y-2">
+                  <div className="space-y-1">
+                    <h2 className="text-xl font-semibold text-foreground">
+                      {detail ? `${detail.drug.name} ${detail.drug.strength}` : "Drug detail"}
+                    </h2>
+                    {detail && isDiscontinuedStatus(detail.drug.status) ? (
+                      <Badge variant="danger" className="w-fit gap-1">
+                        <TriangleAlert className="h-3.5 w-3.5" aria-hidden="true" />
+                        Discontinued
+                      </Badge>
+                    ) : null}
+                  </div>
+                  {/* Subtitle: DIN, manufacturer, form, Health Canada link */}
+                  {detail && (
+                    <div className="space-y-1 text-xs text-muted-foreground">
+                      <div className="font-mono">
+                        <a
+                          href={`https://health-products.canada.ca/dpd-bdpp/info.do?lang=en&code=${detail.drug.din}`}
+                          target="_new"
+                          rel="noopener noreferrer"
+                          className="text-teal-600 hover:underline"
+                        >
+                          {detail.drug.din}
+                        </a>
+                      </div>
+                      <div>{detail.drug.manufacturer}</div>
+                      <div>{detail.drug.form}</div>
+                      <div>Health Canada {detail.drug.status}</div>
+                    </div>
+                  )}
                 </div>
+              </div>
+
+              {/* Refresh and Close buttons */}
+              <div className="flex shrink-0 gap-2">
+                <button
+                  type="button"
+                  aria-label="Regenerate forecast"
+                  className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  onClick={() => void handleGenerateForecast()}
+                  disabled={generateForecastMutation.isPending}
+                >
+                  <RefreshCw
+                    className={cn("h-4 w-4", generateForecastMutation.isPending && "animate-spin")}
+                    aria-hidden="true"
+                  />
+                </button>
                 <button
                   type="button"
                   aria-label="Close drug detail panel"
@@ -432,80 +500,102 @@ export function DrugDetailPanel({
                   <X className="h-4 w-4" aria-hidden="true" />
                 </button>
               </div>
-              <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                {forecastBadge}
-                {detail && isDiscontinuedStatus(detail.drug.status) ? (
-                  <Badge variant="danger" className="gap-1">
-                    <TriangleAlert className="h-3.5 w-3.5" aria-hidden="true" />
-                    Discontinued
-                  </Badge>
-                ) : null}
-              </div>
-            </SheetHeader>
+            </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-5">
-            {!locationId ? (
-              <div className="flex min-h-80 items-center justify-center rounded-lg border border-border bg-white">
-                <LoadingSpinner label="Choose a location" />
+          {/* Phase 1: Secondary header with tabs and timestamp */}
+          <Tabs defaultValue="overview" value={tab} onValueChange={setTab} className="flex h-full min-h-0 flex-col">
+            <div className="border-b border-border px-5">
+              <div className="flex items-center justify-between gap-4 py-3">
+                <TabsList className="grid w-full grid-cols-3">
+                  <TabsTrigger value="overview">Overview</TabsTrigger>
+                  <TabsTrigger value="thresholds">Thresholds</TabsTrigger>
+                  <TabsTrigger value="adjustments">Adjustments</TabsTrigger>
+                </TabsList>
               </div>
-            ) : detailQuery.isLoading ? (
-              <div className="flex min-h-80 items-center justify-center rounded-lg border border-border bg-white">
-                <LoadingSpinner label="Loading drug detail" />
-              </div>
-            ) : detailQuery.isError ? (
-              <Card>
-                <CardContent className="space-y-3 p-5">
-                  <div className="flex items-start gap-2 text-red-700">
-                    <AlertCircle className="mt-0.5 h-4 w-4" aria-hidden="true" />
-                    <div className="space-y-1">
-                      <p className="font-medium">Unable to load drug detail.</p>
-                      <p className="text-sm text-muted-foreground">
-                        {detailQuery.error instanceof Error ? detailQuery.error.message : "Try again."}
-                      </p>
+              {forecast && (
+                <div className="pb-3 text-right text-xs text-muted-foreground">
+                  Generated <HydrationSafeRelativeTime timestamp={forecast.generated_at} />
+                </div>
+              )}
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {!locationId ? (
+                <div className="flex min-h-80 items-center justify-center rounded-lg border border-border bg-white">
+                  <LoadingSpinner label="Choose a location" />
+                </div>
+              ) : detailQuery.isLoading ? (
+                <div className="flex min-h-80 items-center justify-center rounded-lg border border-border bg-white">
+                  <LoadingSpinner label="Loading drug detail" />
+                </div>
+              ) : detailQuery.isError ? (
+                <Card>
+                  <CardContent className="space-y-3 p-5">
+                    <div className="flex items-start gap-2 text-red-700">
+                      <AlertCircle className="mt-0.5 h-4 w-4" aria-hidden="true" />
+                      <div className="space-y-1">
+                        <p className="font-medium">Unable to load drug detail.</p>
+                        <p className="text-sm text-muted-foreground">
+                          {detailQuery.error instanceof Error ? detailQuery.error.message : "Try again."}
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                  <Button type="button" variant="outline" onClick={() => void detailQuery.refetch()}>
-                    Retry
-                  </Button>
-                </CardContent>
-              </Card>
-            ) : detailQuery.data === null ? (
-              <Card>
-                <CardContent className="space-y-3 p-5">
-                  <div className="flex items-start gap-2 text-slate-700">
-                    <Info className="mt-0.5 h-4 w-4" aria-hidden="true" />
-                    <div className="space-y-1">
-                      <p className="font-medium">Drug detail unavailable.</p>
-                      <p className="text-sm text-muted-foreground">
-                        The backend does not have a catalog record for this DIN yet, so the detail panel can only show
-                        limited information.
-                      </p>
+                    <Button type="button" variant="outline" onClick={() => void detailQuery.refetch()}>
+                      Retry
+                    </Button>
+                  </CardContent>
+                </Card>
+              ) : detailQuery.data === null ? (
+                <Card>
+                  <CardContent className="space-y-3 p-5">
+                    <div className="flex items-start gap-2 text-slate-700">
+                      <Info className="mt-0.5 h-4 w-4" aria-hidden="true" />
+                      <div className="space-y-1">
+                        <p className="font-medium">Drug detail unavailable.</p>
+                        <p className="text-sm text-muted-foreground">
+                          The backend does not have a catalog record for this DIN yet, so the detail panel can only show
+                          limited information.
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ) : detail ? (
-              <Tabs defaultValue="overview" value={tab} onValueChange={setTab}>
+                  </CardContent>
+                </Card>
+              ) : detail ? (
                 <div className="space-y-4">
-                  <TabsList className="grid w-full grid-cols-3">
-                    <TabsTrigger value="overview">Overview</TabsTrigger>
-                    <TabsTrigger value="thresholds">Thresholds</TabsTrigger>
-                    <TabsTrigger value="adjustments">Adjustments</TabsTrigger>
-                  </TabsList>
-
                   <TabsContent value="overview" className="space-y-4">
-                    <div className="text-sm text-muted-foreground">
-                      {detail.drug.therapeutic_class} • {detail.drug.form} • {detail.drug.manufacturer} • Health Canada {detail.drug.status}
+                    {/* Phase 2: Metadata strip with four tiles */}
+                    <div className="grid grid-cols-4 gap-2">
+                      <div className="flex flex-col gap-1 rounded-lg border border-border bg-white p-3">
+                        <div className="text-xs font-medium text-muted-foreground">Class</div>
+                        <div className="text-sm font-medium text-foreground">{detail.drug.therapeutic_class}</div>
+                      </div>
+                      <div className="flex flex-col gap-1 rounded-lg border border-border bg-white p-3">
+                        <div className="text-xs font-medium text-muted-foreground">Form</div>
+                        <div className="text-sm font-medium text-foreground">{detail.drug.form}</div>
+                      </div>
+                      <div className="flex flex-col gap-1 rounded-lg border border-border bg-white p-3">
+                        <div className="text-xs font-medium text-muted-foreground">Strength</div>
+                        <div className="text-sm font-medium text-foreground">{detail.drug.strength}</div>
+                      </div>
+                      <div className="flex flex-col gap-1 rounded-lg border border-border bg-white p-3">
+                        <div className="text-xs font-medium text-muted-foreground">Status</div>
+                        <div className="text-sm font-medium text-foreground">{detail.drug.status}</div>
+                      </div>
                     </div>
 
-                    <Card className={cn("border-amber-200 bg-amber-50/70", currentStock !== null && "border-border bg-card")}>
+                    <Card
+                      className={cn(
+                        "border-2",
+                        forecast?.reorder_status === "RED" ? "border-red-300 bg-red-50" : "border-border bg-card"
+                      )}
+                    >
                       <CardHeader className="space-y-2">
                         <CardTitle>Current Stock</CardTitle>
                         <CardDescription>
                           {currentStock !== null
                             ? currentUpdatedAt
-                              ? `Updated ${formatRelativeTime(currentUpdatedAt)}`
+                              ? <>Updated <HydrationSafeRelativeTime timestamp={currentUpdatedAt} /></>
                               : "Current stock recorded"
                             : "Required to generate forecasts"}
                         </CardDescription>
@@ -565,7 +655,12 @@ export function DrugDetailPanel({
                       </CardContent>
                     </Card>
 
-                    <Card>
+                    {/* Phase 3: Forecast Card with RED alert banner and urgentPulse */}
+                    <Card
+                      className={cn(
+                        currentStock !== null && forecast && forecast.reorder_status === "RED" && "animate-urgentPulse"
+                      )}
+                    >
                       <CardHeader className="space-y-2">
                         <CardTitle>Forecast</CardTitle>
                         <CardDescription>
@@ -579,49 +674,62 @@ export function DrugDetailPanel({
                       <CardContent className="space-y-4">
                         {currentStock !== null ? (
                           forecast ? (
-                            <div className="space-y-3">
-                              <div className="grid gap-3 text-sm sm:grid-cols-3">
-                                <div>
-                                  <div className="text-xs uppercase text-muted-foreground">Predicted demand</div>
-                                  <div className="mt-1 font-mono font-medium">{forecast.predicted_quantity} units / {forecast.forecast_horizon_days} days</div>
+                            <div className="space-y-4">
+                              {/* Phase 3: RED status alert banner */}
+                              {forecast.reorder_status === "RED" && (
+                                <div className="rounded-lg border-l-4 border-l-red-600 bg-red-50 px-4 py-3">
+                                  <p className="text-sm font-medium text-red-800">
+                                    Stockout in {Math.round(forecast.days_of_supply)} day(s). Lead time {threshold?.lead_time_days ?? 2}d — order
+                                    today to be safe.
+                                  </p>
                                 </div>
+                              )}
+
+                              {/* Phase 3: Forecast stat blocks */}
+                              <div className="grid gap-3 text-sm sm:grid-cols-4">
                                 <div>
-                                  <div className="text-xs uppercase text-muted-foreground">Days of supply</div>
+                                  <div className="text-xs uppercase text-muted-foreground">Days of Supply</div>
                                   <div
                                     className={cn(
-                                      "mt-1 font-mono font-semibold",
+                                      "mt-1 font-mono text-lg font-semibold",
                                       forecast.days_of_supply < 3 && "text-red-700",
                                       forecast.days_of_supply >= 3 && forecast.days_of_supply <= 7 && "text-amber-700",
                                       forecast.days_of_supply > 7 && "text-green-700"
                                     )}
                                   >
-                                    {forecast.days_of_supply.toFixed(1)} days
+                                    {forecast.days_of_supply.toFixed(1)}
                                   </div>
                                 </div>
                                 <div>
-                                  <div className="text-xs uppercase text-muted-foreground">Confidence</div>
-                                  <div className="mt-1">
-                                    <ConfidenceBadge value={forecast.confidence.toLowerCase() as "high" | "medium" | "low"} />
+                                  <div className="text-xs uppercase text-muted-foreground">Predicted Demand</div>
+                                  <div className="mt-1 font-mono font-medium">{forecast.predicted_quantity} units</div>
+                                </div>
+                                <div>
+                                  <div className="text-xs uppercase text-muted-foreground">Daily Average</div>
+                                  <div className="mt-1 font-mono font-medium">{forecast.avg_daily_demand} units/day</div>
+                                </div>
+                                <div>
+                                  <div className="text-xs uppercase text-muted-foreground">Reorder Point</div>
+                                  <div className="mt-1 font-mono font-medium">
+                                    {forecast.reorder_point !== null ? `${forecast.reorder_point.toFixed(1)} units` : "—"}
                                   </div>
                                 </div>
                               </div>
-                              <div className="text-sm text-muted-foreground">Last generated {formatRelativeTime(forecast.generated_at)}</div>
-                              <div className="flex flex-wrap items-center gap-2 text-sm">
-                                <Badge variant="muted">Model: {formatForecastModelPathLabel(forecast.model_path)}</Badge>
+
+                              {/* Confidence badge and footer */}
+                              <div className="flex items-center gap-2">
+                                <ConfidenceBadge value={forecast.confidence.toLowerCase() as "high" | "medium" | "low"} />
                               </div>
-                              <Button type="button" variant="teal" onClick={() => void handleGenerateForecast()}>
-                                {generateForecastMutation.isPending ? (
-                                  <>
-                                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                                    Regenerating...
-                                  </>
-                                ) : (
-                                  <>
-                                    Regenerate
-                                    <ChevronRight className="h-4 w-4" aria-hidden="true" />
-                                  </>
-                                )}
-                              </Button>
+
+                              {/* Footer with timestamp and model info */}
+                              <div className="flex items-center justify-between pt-2 text-xs text-muted-foreground">
+                                <div>Generated <HydrationSafeRelativeTime timestamp={forecast.generated_at} /></div>
+                                <div>
+                                  {formatForecastModelPathLabel(forecast.model_path)} · {forecast.data_points_used} data pts
+                                </div>
+                              </div>
+
+                              <ForecastChart actual={actualSeries} forecastValues={forecastSeries} />
                             </div>
                           ) : (
                             <Button type="button" variant="teal" onClick={() => void handleGenerateForecast()}>
@@ -644,31 +752,16 @@ export function DrugDetailPanel({
                           </div>
                         )}
 
-                        <ForecastChart actual={actualSeries} forecastValues={forecastSeries} />
 
-                        {forecast ? (
-                          <div className="space-y-3">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              className="px-0 text-teal-700 hover:bg-transparent hover:text-teal-800"
-                              disabled={explanation.isLoading}
-                              onClick={() => void handleExplainForecast()}
-                            >
-                              {explanation.isLoading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Sparkles className="h-4 w-4" aria-hidden="true" />}
-                              {explanation.isLoading ? "Explaining..." : "Explain this forecast"}
-                            </Button>
-                            {explanationExpanded ? (
-                              <ForecastExplanation
-                                title={`${forecast.drug_name ?? detail?.drug.name ?? "Forecast"} — Forecast explanation`}
-                                explanation={explanation.explanationText}
-                                isLoading={explanation.isLoading}
-                                isError={explanation.isError}
-                                onRetry={() => void handleExplainForecast(true)}
-                                onCollapse={() => onExplanationExpandedChange(false)}
-                              />
-                            ) : null}
-                          </div>
+                        {forecast && explanationExpanded ? (
+                          <ForecastExplanation
+                            title={`${forecast.drug_name ?? detail?.drug.name ?? "Forecast"} — Forecast explanation`}
+                            explanation={explanation.explanationText}
+                            isLoading={explanation.isLoading}
+                            isError={explanation.isError}
+                            onRetry={() => void handleExplainForecast(true)}
+                            onCollapse={() => onExplanationExpandedChange(false)}
+                          />
                         ) : null}
                       </CardContent>
                     </Card>
@@ -683,12 +776,42 @@ export function DrugDetailPanel({
                       Adjustments are audit notes only. To change your current stock for forecasting, edit the stock number in the Overview tab or directly in the dashboard.
                     </div>
 
+                    {/* Phase 6: Add adjustment with reason selector */}
                     <Card>
                       <CardHeader className="space-y-2">
-                        <CardTitle>Add note</CardTitle>
-                        <CardDescription>Positive values mean received stock. Negative values mean removed or expired stock.</CardDescription>
+                        <CardTitle>Add adjustment</CardTitle>
+                        <CardDescription>Log a stock correction with reason and notes.</CardDescription>
                       </CardHeader>
                       <CardContent className="space-y-4">
+                        {/* Phase 6: Reason selector (2-column grid) */}
+                        <div className="space-y-2">
+                          <label className="block text-sm font-medium text-foreground">Reason</label>
+                          <div className="grid grid-cols-2 gap-2">
+                            {[
+                              "Cycle count",
+                              "Wastage/damage",
+                              "Return to supplier",
+                              "Borrow from another store",
+                              "Other"
+                            ].map((reason) => (
+                              <button
+                                key={reason}
+                                type="button"
+                                className={cn(
+                                  "rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
+                                  adjustmentReason === reason
+                                    ? "border-pharma-teal bg-teal-50 text-pharma-teal"
+                                    : "border-border bg-white text-foreground hover:bg-muted"
+                                )}
+                                onClick={() => setAdjustmentReason(reason)}
+                              >
+                                {reason}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Quantity and note inputs */}
                         <div className="grid gap-3 sm:grid-cols-[120px_1fr]">
                           <div className="space-y-2">
                             <label className="block text-sm font-medium text-foreground">+/- quantity</label>
@@ -696,14 +819,48 @@ export function DrugDetailPanel({
                           </div>
                           <div className="space-y-2">
                             <label className="block text-sm font-medium text-foreground">Note (required)</label>
-                            <Textarea ref={adjustmentNoteRef} rows={3} placeholder="McKesson delivery Jan 15" />
+                            <Textarea ref={adjustmentNoteRef} rows={3} placeholder="Received from supplier..." />
                           </div>
                         </div>
+
+                        {/* Current/After/New supply preview */}
+                        {currentStock !== null && (
+                          <div className="space-y-1 rounded-lg border border-border bg-muted px-3 py-2 text-xs">
+                            <div className="flex justify-between text-muted-foreground">
+                              <span>Current</span>
+                              <span className="font-medium text-foreground">{currentStock} units</span>
+                            </div>
+                            {adjustmentQuantityRef.current?.value && (
+                              <>
+                                <div className="flex justify-between text-muted-foreground">
+                                  <span>After adjustment</span>
+                                  <span className="font-medium text-foreground">
+                                    {currentStock + Number(adjustmentQuantityRef.current.value)} units
+                                  </span>
+                                </div>
+                                {forecast && forecast.avg_daily_demand > 0 && (
+                                  <div className="flex justify-between text-muted-foreground">
+                                    <span>New supply (days)</span>
+                                    <span className="font-medium text-foreground">
+                                      {Math.round(
+                                        ((currentStock + Number(adjustmentQuantityRef.current.value)) /
+                                          forecast.avg_daily_demand) *
+                                          10
+                                      ) / 10}{" "}
+                                      days
+                                    </span>
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        )}
+
                         {adjustmentError ? <p className="text-sm font-medium text-red-600">{adjustmentError}</p> : null}
                         {adjustmentFeedback ? <p className="text-sm font-medium text-teal-700">{adjustmentFeedback}</p> : null}
                         <Button type="button" variant="teal" onClick={() => void handleAddAdjustment()} disabled={adjustmentMutation.isPending}>
                           {adjustmentMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
-                          Add note
+                          Add adjustment
                         </Button>
                       </CardContent>
                     </Card>
@@ -722,7 +879,7 @@ export function DrugDetailPanel({
                           adjustments.map((adjustment) => (
                             <div key={`${adjustment.adjusted_at}-${adjustment.note}`} className="flex items-start justify-between gap-4 rounded-md border border-border bg-white px-3 py-3 text-sm">
                               <div className="min-w-0">
-                                <div className="font-medium text-foreground">{formatRelativeTime(adjustment.adjusted_at)}</div>
+                                <div className="font-medium text-foreground"><HydrationSafeRelativeTime timestamp={adjustment.adjusted_at} /></div>
                                 <div className="mt-1 text-muted-foreground">{adjustment.note}</div>
                               </div>
                               <div
@@ -743,18 +900,62 @@ export function DrugDetailPanel({
                     </Card>
                   </TabsContent>
                 </div>
-              </Tabs>
-            ) : (
-              <Card>
-                <CardContent className="p-5">
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <Info className="h-4 w-4" aria-hidden="true" />
-                    Drug detail is unavailable.
+              ) : (
+                <Card>
+                  <CardContent className="p-5">
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <Info className="h-4 w-4" aria-hidden="true" />
+                      Drug detail is unavailable.
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+
+            {/* Phase 7: Sticky footer - only on Overview tab */}
+            {tab === "overview" && detail && (
+              <div className="border-t border-border bg-white px-5 py-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="text-sm text-foreground">
+                    Lead time: <span className="font-medium">{threshold?.lead_time_days ?? 2} day(s)</span>
                   </div>
-                </CardContent>
-              </Card>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="px-0 text-teal-700 hover:bg-transparent hover:text-teal-800"
+                      onClick={() => void handleExplainForecast()}
+                    >
+                      Explain
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="bg-pharma-teal text-white hover:bg-teal-700"
+                      onClick={() => setPoDialogOpen(true)}
+                    >
+                      Generate purchase order
+                    </Button>
+                  </div>
+                </div>
+              </div>
             )}
-          </div>
+          </Tabs>
+
+          {/* Phase 7: PurchaseOrderWorkflowDialog stub - would be wired here */}
+          {/* The actual dialog component would be imported and rendered here
+              <PurchaseOrderWorkflowDialog
+                open={poDialogOpen}
+                onOpenChange={setPoDialogOpen}
+                locationId={locationId}
+                locationName={null} // Would get from location context
+                locationAddress={null} // Would get from location context
+                rows={[]} // Would get selected drugs
+                initialDraft={null}
+                initialSavedOrderId={null}
+              />
+          */}
         </div>
       </SheetContent>
     </Sheet>
@@ -768,15 +969,7 @@ function ForecastChart({
   actual: DrugDetailDispensingHistoryDto[];
   forecastValues: number[];
 }) {
-  const width = 640;
-  const height = 220;
-  const chartHeight = 150;
-  const actualCount = actual.length;
-  const forecastCount = forecastValues.length;
-  const totalCount = actualCount + forecastCount;
-  const maxValue = Math.max(...actual.map((entry) => entry.quantity), ...forecastValues, 1);
-
-  if (totalCount === 0) {
+  if (actual.length === 0) {
     return (
       <div className="rounded-md border border-dashed border-border px-3 py-10 text-center text-sm text-muted-foreground">
         No dispensing history yet.
@@ -784,74 +977,104 @@ function ForecastChart({
     );
   }
 
-  const segmentWidth = width / totalCount;
-  const barWidth = Math.max(10, segmentWidth * 0.55);
-  const forecastPoints = forecastValues.map((value, index) => {
-    const x = (actualCount + index) * segmentWidth + segmentWidth / 2;
-    const y = chartPointToY(value, maxValue, chartHeight);
-    return `${x},${y}`;
-  });
+  const sortedActual = sortWeeklyHistory(actual);
+  const chartData = [
+    ...sortedActual.map((entry) => ({
+      week: entry.week,
+      label: formatWeekLabel(entry.week),
+      actual: entry.quantity,
+      forecast: null,
+    })),
+    ...forecastValues.map((value, index) => ({
+      week: `forecast-${index}`,
+      label: `+${index + 1}w`,
+      actual: null,
+      forecast: value,
+    })),
+  ];
+
+  const peakEntry = sortedActual.reduce((max, entry) =>
+    entry.quantity > max.quantity ? entry : max,
+    sortedActual[0]
+  );
+  const currentEntry = sortedActual[sortedActual.length - 1];
 
   return (
-    <div className="space-y-2 rounded-lg border border-border bg-white p-3">
-      <div className="overflow-x-auto">
-        <svg viewBox={`0 0 ${width} ${height}`} className="h-[220px] w-full">
-          <line
-            x1={(actualCount / totalCount) * width}
-            x2={(actualCount / totalCount) * width}
-            y1={14}
-            y2={chartHeight}
-            stroke="rgb(148 163 184)"
-            strokeDasharray="6 6"
-          />
-          {actual.map((entry, index) => {
-            const x = index * segmentWidth + (segmentWidth - barWidth) / 2;
-            const barHeight = chartHeight - chartPointToY(entry.quantity, maxValue, chartHeight);
-            const y = chartHeight - barHeight;
-            return (
-              <g key={`${entry.week}-${index}`}>
-                <rect x={x} y={y} width={barWidth} height={barHeight} rx="4" fill="rgb(30 58 138)" />
-              </g>
-            );
-          })}
-          {forecastValues.length > 0 ? (
-            <polyline
-              points={forecastPoints.join(" ")}
-              fill="none"
-              stroke="rgb(13 148 136)"
-              strokeWidth="3"
-              strokeDasharray="8 6"
-              strokeLinejoin="round"
-              strokeLinecap="round"
+    <div className="space-y-3 rounded-lg border border-border bg-white p-4">
+      <div className="h-56 w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={chartData} margin={{ top: 16, right: 14, bottom: 4, left: 0 }}>
+            <defs>
+              <linearGradient id="actualFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#0D9488" stopOpacity={0.18} />
+                <stop offset="100%" stopColor="#0D9488" stopOpacity={0.01} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid stroke="hsl(214 22% 92%)" strokeDasharray="3 3" vertical={false} />
+            <XAxis
+              dataKey="label"
+              tick={{ fontSize: 10, fill: "hsl(217 15% 42%)", fontFamily: "Geist Mono" }}
+              axisLine={false}
+              tickLine={false}
+              interval={Math.max(0, Math.floor(chartData.length / 8))}
             />
-          ) : null}
-          {forecastValues.map((value, index) => {
-            const x = (actualCount + index) * segmentWidth + segmentWidth / 2;
-            const y = chartPointToY(value, maxValue, chartHeight);
-            return <circle key={`forecast-${index}`} cx={x} cy={y} r="3.5" fill="rgb(13 148 136)" />;
-          })}
-        </svg>
+            <YAxis
+              width={36}
+              tick={{ fontSize: 10, fill: "hsl(217 15% 42%)", fontFamily: "Geist Mono" }}
+              axisLine={false}
+              tickLine={false}
+              domain={[0, "auto"]}
+            />
+            <Tooltip
+              cursor={{ stroke: "hsl(214 22% 86%)" }}
+              contentStyle={{
+                background: "#0F1F3D",
+                border: "none",
+                borderRadius: 8,
+                padding: "6px 10px",
+                fontSize: 11,
+                color: "#fff",
+                fontFamily: "Geist Mono",
+              }}
+              labelStyle={{ color: "#94a3b8", fontSize: 10 }}
+              formatter={(value: unknown) =>
+                value == null ? null : [`${value} units`, (value as number) > 0 ? "Dispensed" : "Forecast"]
+              }
+            />
+            <Area
+              type="monotone"
+              dataKey="actual"
+              stroke="#0D9488"
+              strokeWidth={2}
+              fill="url(#actualFill)"
+              isAnimationActive={false}
+              connectNulls={false}
+              dot={false}
+            />
+            <Line
+              type="monotone"
+              dataKey="forecast"
+              stroke="#DC2626"
+              strokeWidth={2}
+              strokeDasharray="5 4"
+              dot={{ r: 3, fill: "#DC2626", stroke: "#fff", strokeWidth: 1.5 }}
+              isAnimationActive={false}
+              connectNulls={false}
+            />
+            <ReferenceDot x={peakEntry.week} y={peakEntry.quantity} r={4} fill="#0F1F3D" stroke="#fff" strokeWidth={2} />
+            <ReferenceDot x={currentEntry.week} y={currentEntry.quantity} r={4} fill="#D97706" stroke="#fff" strokeWidth={2} />
+          </ComposedChart>
+        </ResponsiveContainer>
       </div>
-      <div className="grid text-[11px] text-muted-foreground" style={{ gridTemplateColumns: `repeat(${totalCount}, minmax(0, 1fr))` }}>
-        {actual.map((entry) => (
-          <div key={entry.week} className="truncate text-center">
-            {formatWeekLabel(entry.week)}
-          </div>
-        ))}
-        {forecastValues.map((_, index) => (
-          <div key={`forecast-label-${index}`} className="truncate text-center">
-            +{index + 1}w
-          </div>
-        ))}
-      </div>
+
       <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
         <div className="inline-flex items-center gap-2">
-          <span className="h-2.5 w-2.5 rounded-sm bg-slate-800" aria-hidden="true" />
-          Actual dispensing
+          <span className="h-1.5 w-3 rounded-sm bg-teal-600" aria-hidden="true" />
+          Dispensed
         </div>
         <div className="inline-flex items-center gap-2">
-          <span className="h-0.5 w-4 border-t-2 border-dashed border-teal-600" aria-hidden="true" />
-          Forecast (est.)
+          <span className="h-px w-3 border-t-[2px] border-dashed border-red-600" aria-hidden="true" />
+          Forecast
         </div>
       </div>
     </div>
@@ -989,87 +1212,112 @@ function ThresholdTab({
         <CardTitle>Thresholds</CardTitle>
         <CardDescription>Autosaves after a short pause when you change a field.</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-5">
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-foreground">
-            How many days does this drug take to arrive from your supplier?
-          </label>
-          <Input
-            type="number"
-            min={1}
-            max={30}
-            value={draft.lead_time_days}
-            onChange={(event) => {
-              const nextDraft = { ...draft, lead_time_days: event.target.value };
-              setDraft(nextDraft);
-              queueSave(nextDraft);
-            }}
-          />
-          <p className="text-xs text-muted-foreground">Default: 2 days</p>
-        </div>
+      <CardContent className="space-y-4">
+        {/* Phase 5: FieldRow layout - label+hint on left, input on right */}
 
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-foreground">Safety buffer</label>
-          <div className="inline-flex rounded-md border border-input bg-white p-1">
-            {(["CONSERVATIVE", "BALANCED", "AGGRESSIVE"] as SafetyMultiplier[]).map((value) => (
-              <button
-                key={value}
-                type="button"
-                className={cn(
-                  "rounded px-3 py-1.5 text-sm font-medium transition-colors",
-                  draft.safety_multiplier === value ? "bg-pharma-teal text-white" : "text-muted-foreground hover:bg-muted"
-                )}
-                onClick={() => {
-                  const nextDraft = { ...draft, safety_multiplier: value };
-                  setDraft(nextDraft);
-                  queueSave(nextDraft);
-                }}
-              >
-                {value.charAt(0) + value.slice(1).toLowerCase()}
-              </button>
-            ))}
+        {/* Lead time field */}
+        <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-white px-4 py-3">
+          <div className="min-w-0">
+            <label className="text-sm font-medium text-foreground">Lead time</label>
+            <p className="mt-1 text-xs text-muted-foreground">Days for supplier delivery (1-30)</p>
           </div>
-          <p className="text-xs text-muted-foreground">Conservative = 1.5× lead time, Balanced = 1×, Aggressive = 0.75×</p>
+          <div className="shrink-0">
+            <Input
+              type="number"
+              min={1}
+              max={30}
+              className="w-20"
+              value={draft.lead_time_days}
+              onChange={(event) => {
+                const nextDraft = { ...draft, lead_time_days: event.target.value };
+                setDraft(nextDraft);
+                queueSave(nextDraft);
+              }}
+            />
+            <p className="mt-1 text-right text-xs text-muted-foreground">Default: 2</p>
+          </div>
         </div>
 
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-foreground">
-            Send a critical alert when days of supply falls below
-          </label>
-          <Input
-            type="number"
-            min={0}
-            value={draft.red_threshold_days}
-            onChange={(event) => {
-              const nextDraft = { ...draft, red_threshold_days: event.target.value };
-              setDraft(nextDraft);
-              queueSave(nextDraft);
-            }}
-          />
-          <p className="text-xs text-muted-foreground">Default: 3 days. Must be less than amber threshold.</p>
+        {/* Safety multiplier field */}
+        <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-white px-4 py-3">
+          <div className="min-w-0">
+            <label className="text-sm font-medium text-foreground">Safety buffer</label>
+            <p className="mt-1 text-xs text-muted-foreground">Conservative = 1.5×, Balanced = 1×, Aggressive = 0.75×</p>
+          </div>
+          <div className="shrink-0">
+            <div className="inline-flex rounded-md border border-input bg-muted p-1">
+              {(["CONSERVATIVE", "BALANCED", "AGGRESSIVE"] as SafetyMultiplier[]).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={cn(
+                    "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+                    draft.safety_multiplier === value
+                      ? "bg-pharma-teal text-white"
+                      : "text-muted-foreground hover:bg-white hover:text-foreground"
+                  )}
+                  onClick={() => {
+                    const nextDraft = { ...draft, safety_multiplier: value };
+                    setDraft(nextDraft);
+                    queueSave(nextDraft);
+                  }}
+                >
+                  {value === "CONSERVATIVE" ? "Conservative" : value === "BALANCED" ? "Balanced" : "Aggressive"}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-foreground">
-            Send a warning when days of supply falls below
-          </label>
-          <Input
-            type="number"
-            min={0}
-            value={draft.amber_threshold_days}
-            onChange={(event) => {
-              const nextDraft = { ...draft, amber_threshold_days: event.target.value };
-              setDraft(nextDraft);
-              queueSave(nextDraft);
-            }}
-          />
-          <p className="text-xs text-muted-foreground">Default: 7 days.</p>
+        {/* Red threshold field */}
+        <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-white px-4 py-3">
+          <div className="min-w-0">
+            <label className="text-sm font-medium text-foreground">Critical (Red) below</label>
+            <p className="mt-1 text-xs text-muted-foreground">Days of supply threshold for alert</p>
+          </div>
+          <div className="shrink-0">
+            <Input
+              type="number"
+              min={0}
+              className="w-20"
+              value={draft.red_threshold_days}
+              onChange={(event) => {
+                const nextDraft = { ...draft, red_threshold_days: event.target.value };
+                setDraft(nextDraft);
+                queueSave(nextDraft);
+              }}
+            />
+            <p className="mt-1 text-right text-xs text-muted-foreground">Default: 3</p>
+          </div>
         </div>
 
-        <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-white px-3 py-3">
-          <div>
-            <div className="text-sm font-medium text-foreground">Send email alerts for this drug</div>
-            <p className="text-xs text-muted-foreground">Turn alerts on or off for this threshold.</p>
+        {/* Amber threshold field */}
+        <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-white px-4 py-3">
+          <div className="min-w-0">
+            <label className="text-sm font-medium text-foreground">Reorder (Amber) below</label>
+            <p className="mt-1 text-xs text-muted-foreground">Days of supply threshold for warning</p>
+          </div>
+          <div className="shrink-0">
+            <Input
+              type="number"
+              min={0}
+              className="w-20"
+              value={draft.amber_threshold_days}
+              onChange={(event) => {
+                const nextDraft = { ...draft, amber_threshold_days: event.target.value };
+                setDraft(nextDraft);
+                queueSave(nextDraft);
+              }}
+            />
+            <p className="mt-1 text-right text-xs text-muted-foreground">Default: 7</p>
+          </div>
+        </div>
+
+        {/* Email alerts field */}
+        <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-white px-4 py-3">
+          <div className="min-w-0">
+            <label className="text-sm font-medium text-foreground">Email alerts</label>
+            <p className="mt-1 text-xs text-muted-foreground">Notify when thresholds are breached</p>
           </div>
           <Switch
             checked={draft.notifications_enabled}
