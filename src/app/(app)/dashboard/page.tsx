@@ -34,6 +34,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { listUploads } from "@/lib/api/upload";
 import { DrugDetailPanel } from "@/components/product/drug-detail-panel";
+import { getDrugDetail, drugDetailQueryKey } from "@/lib/api/drug-detail";
 import {
   generateForecast,
   explanationQueryKey,
@@ -803,20 +804,19 @@ export default function DashboardPage() {
                 }
               }}
             >
-              <table className="w-full min-w-[1180px] table-fixed text-left text-sm">
+              <table className="w-full min-w-[1100px] table-fixed text-left text-sm">
                 <thead className="sticky top-0 z-10 border-b border-border bg-slate-50 text-xs uppercase text-muted-foreground">
                   <tr>
                     <th className={cn("w-12 px-3 py-3", pulseSelectionHeader && "animate-pulse bg-amber-100")}>
                       <span className="sr-only">Select drug</span>
                     </th>
                     <th className="w-64 px-4 py-3 font-medium">Drug</th>
-                    <th className={cn("w-40 px-4 py-3 font-medium", pulseStockHeader && "animate-pulse bg-amber-100")}>
-                      Current Stock
+                    <th className="w-44 px-4 py-3 font-medium">Status</th>
+                    <th className={cn("w-44 px-4 py-3 font-medium", pulseStockHeader && "animate-pulse bg-amber-100")}>
+                      Stock
                     </th>
-                    <th className="w-32 px-4 py-3 font-medium">Days Supply</th>
-                    <th className="w-40 px-4 py-3 font-medium">Forecasted Demand</th>
+                    <th className="w-44 px-4 py-3 font-medium">Forecast · 30D</th>
                     <th className="w-36 px-4 py-3 font-medium">Confidence</th>
-                    <th className="w-40 px-4 py-3 font-medium">Status</th>
                     <th className="w-36 px-4 py-3 font-medium">Last Generated</th>
                     <th className="w-56 px-4 py-3 font-medium">Actions</th>
                   </tr>
@@ -1143,6 +1143,17 @@ function ForecastTableRow({
   const hasStock = isStockEntered(row);
   const status = normalizedReorderStatus(row.forecast?.reorder_status);
   const discontinued = isDiscontinuedStatus(row.drugStatus);
+
+  const sparklineQuery = useQuery({
+    queryKey: drugDetailQueryKey(locationId, row.din),
+    enabled: Boolean(locationId && row.forecast),
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      const accessToken = await getDashboardAccessToken("dashboard-sparkline");
+      return getDrugDetail(locationId!, row.din, accessToken);
+    }
+  });
+  const sparklineData = sparklineQuery.data?.dispensing_history.slice(-12).map((d) => d.quantity) ?? null;
   const explanation = useForecastExplanation({
     locationId,
     din: row.forecast ? row.din : null,
@@ -1202,6 +1213,15 @@ function ForecastTableRow({
             {row.therapeuticClass ? <div className="truncate text-xs text-muted-foreground">{row.therapeuticClass}</div> : null}
           </div>
         </td>
+        {/* STATUS — first after Drug */}
+        <td className="px-4 py-4">
+          <div className="space-y-1">
+            <ReorderStatusCell row={row} discontinued={discontinued} rowError={rowError} />
+            {row.forecast ? <Badge variant="muted">Model: {formatForecastModelPathLabel(row.forecast.model_path)}</Badge> : null}
+            {stale ? <Badge variant="warning">Stock changed</Badge> : null}
+          </div>
+        </td>
+        {/* STOCK — units + days supply + progress bar */}
         <td className="px-4 py-4" onClick={(event) => event.stopPropagation()}>
           {isEditing ? (
             <input
@@ -1235,7 +1255,7 @@ function ForecastTableRow({
               }}
             />
           ) : (
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               <button
                 type="button"
                 disabled={locked}
@@ -1245,7 +1265,14 @@ function ForecastTableRow({
                 )}
                 onClick={() => startEditingStock(row.din)}
               >
-                <span>{hasStock ? `${row.currentStock} units` : "Enter qty"}</span>
+                {hasStock ? (
+                  <>
+                    <span className="font-bold text-slate-900">{row.currentStock}</span>
+                    <span className="text-slate-500"> units</span>
+                  </>
+                ) : (
+                  <span>Enter qty</span>
+                )}
                 {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : null}
                 {saved ? <Check className="h-3.5 w-3.5 text-green-600" aria-hidden="true" /> : null}
                 {!saved && !saving ? (
@@ -1255,37 +1282,22 @@ function ForecastTableRow({
                   />
                 ) : null}
               </button>
-              {hasStock && row.stockUpdatedAt ? (
-                <div className="px-1 text-[11px] text-muted-foreground" title={row.stockUpdatedAt}>
-                  Updated {relativeTime(row.stockUpdatedAt)}
-                </div>
-              ) : null}
+              {generating ? (
+                <Loader2 className="h-4 w-4 animate-spin text-pharma-teal" aria-label="Generating forecast" />
+              ) : (
+                <StockSupplyDisplay row={row} horizonDays={horizonDays} />
+              )}
             </div>
           )}
           {warning ? <div className="mt-1 text-xs font-medium text-red-600">{warning}</div> : null}
-        </td>
-        <td className="px-4 py-4">
-          {generating ? <Loader2 className="h-4 w-4 animate-spin text-pharma-teal" aria-label="Generating forecast" /> : <DaysOfSupply row={row} />}
           {rowError ? <div className="mt-1 text-xs font-medium text-red-600">{rowError}</div> : null}
         </td>
-        <td className="px-4 py-4 text-sm text-slate-700">
-          {generating ? (
-            <Loader2 className="h-4 w-4 animate-spin text-pharma-teal" aria-hidden="true" />
-          ) : row.forecast?.predicted_quantity !== null && row.forecast?.predicted_quantity !== undefined ? (
-            `${row.forecast.predicted_quantity} units / ${horizonDays} days`
-          ) : (
-            "—"
-          )}
+        {/* FORECAST · 30D — number + sparkline */}
+        <td className="px-4 py-4">
+          <ForecastCell row={row} horizonDays={horizonDays} generating={generating} sparklineData={sparklineData} />
         </td>
         <td className="px-4 py-4">
           {row.forecast?.confidence ? <ConfidenceBadge value={row.forecast.confidence.toLowerCase() as "high" | "medium" | "low"} /> : null}
-        </td>
-        <td className="px-4 py-4">
-          <div className="space-y-1">
-            <RowStatusBadge row={row} horizonDays={horizonDays} discontinued={discontinued} rowError={rowError} />
-            {row.forecast ? <Badge variant="muted">Model: {formatForecastModelPathLabel(row.forecast.model_path)}</Badge> : null}
-            {stale ? <Badge variant="warning">Stock changed</Badge> : null}
-          </div>
         </td>
         <td className="px-4 py-4 text-sm text-muted-foreground">
           {!hasStock ? "—" : row.forecast?.generated_at ? relativeTime(row.forecast.generated_at) : "Never"}
@@ -1324,7 +1336,7 @@ function ForecastTableRow({
       </tr>
       {row.forecast && explanationExpanded ? (
         <tr className="border-b border-border bg-white">
-          <td colSpan={9} className="px-4 pb-4 pt-0" onClick={(event) => event.stopPropagation()}>
+          <td colSpan={8} className="px-4 pb-4 pt-0" onClick={(event) => event.stopPropagation()}>
             <ForecastExplanation
               title={explanationTitle}
               explanation={explanation.explanationText}
@@ -1340,34 +1352,29 @@ function ForecastTableRow({
   );
 }
 
-function DaysOfSupply({ row }: { row: DrugRow }) {
-  if (!isStockEntered(row) || row.forecast?.days_of_supply === null || row.forecast?.days_of_supply === undefined) {
-    return <span className="text-muted-foreground">—</span>;
-  }
+const STATUS_COLORS = {
+  RED: { dot: "bg-red-600", text: "text-red-600", border: "border-red-200", bg: "bg-red-50", hex: "#dc2626" },
+  AMBER: { dot: "bg-amber-500", text: "text-amber-600", border: "border-amber-200", bg: "bg-amber-50", hex: "#d97706" },
+  GREEN: { dot: "bg-green-600", text: "text-green-700", border: "border-green-200", bg: "bg-green-50", hex: "#16a34a" }
+} as const;
 
-  const days = row.forecast.days_of_supply;
-  return (
-    <span
-      className={cn(
-        "font-semibold",
-        days < 3 && "text-red-700",
-        days >= 3 && days <= 7 && "text-amber-700",
-        days > 7 && "text-green-700"
-      )}
-    >
-      {days.toFixed(1)} days
-    </span>
-  );
+function reorderSubtext(status: "RED" | "AMBER" | "GREEN" | null, daysOfSupply: number | undefined): string | null {
+  if (!status || daysOfSupply === undefined || daysOfSupply === null) return null;
+  if (status === "RED") return `Stockout in ${daysOfSupply.toFixed(1)}d`;
+  const reorderDate = new Date();
+  reorderDate.setDate(reorderDate.getDate() + Math.round(daysOfSupply));
+  const label = reorderDate.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  if (status === "AMBER") return `Reorder by ${label}`;
+  if (status === "GREEN") return daysOfSupply >= 21 ? "Reorder ≥3 wks" : `Reorder by ${label}`;
+  return null;
 }
 
-function RowStatusBadge({
+function ReorderStatusCell({
   row,
-  horizonDays,
   discontinued,
   rowError
 }: {
   row: DrugRow;
-  horizonDays: number;
   discontinued: boolean;
   rowError: string | null;
 }) {
@@ -1388,11 +1395,131 @@ function RowStatusBadge({
   }
 
   const status = normalizedReorderStatus(row.forecast?.reorder_status);
-  if (status === "RED") return <StatusBadge value="red" />;
-  if (status === "AMBER") return <StatusBadge value="amber" />;
-  if (status === "GREEN") return <StatusBadge value="ok" />;
+  const days = row.forecast?.days_of_supply;
+  const subtext = reorderSubtext(status, days);
 
-  return <Badge variant="muted" title={`No ${horizonDays}-day forecast yet`}>Not generated</Badge>;
+  if (status === "RED" || status === "AMBER" || status === "GREEN") {
+    const c = STATUS_COLORS[status];
+    const label = status === "RED" ? "Critical" : status === "AMBER" ? "Reorder soon" : "Well stocked";
+    return (
+      <div className="space-y-1">
+        <div
+          className={cn(
+            "inline-flex items-start gap-1.5 rounded-xl border px-2.5 py-1 text-xs font-semibold leading-tight",
+            c.border,
+            c.bg,
+            c.text
+          )}
+        >
+          <span className={cn("mt-0.5 h-1.5 w-1.5 flex-shrink-0 rounded-full", c.dot)} aria-hidden="true" />
+          {label}
+        </div>
+        {subtext ? (
+          <div className={cn("font-mono text-xs", c.text)}>{subtext}</div>
+        ) : null}
+      </div>
+    );
+  }
+
+  return <Badge variant="muted">Not generated</Badge>;
+}
+
+function StockSupplyDisplay({ row, horizonDays }: { row: DrugRow; horizonDays: number }) {
+  if (!isStockEntered(row) || row.forecast?.days_of_supply === null || row.forecast?.days_of_supply === undefined) {
+    return null;
+  }
+
+  const days = row.forecast.days_of_supply;
+  const status = normalizedReorderStatus(row.forecast.reorder_status);
+  const c = status && status in STATUS_COLORS ? STATUS_COLORS[status as keyof typeof STATUS_COLORS] : null;
+  const thresholdDays = row.forecast.threshold?.red_threshold_days ?? null;
+  const fillPct = Math.min(days / horizonDays, 1) * 100;
+  const markerPct = thresholdDays !== null ? Math.min(thresholdDays / horizonDays, 1) * 100 : null;
+
+  return (
+    <div className="space-y-1 px-1">
+      <div className={cn("font-mono text-xs font-medium", c?.text ?? "text-slate-600")}>
+        {days.toFixed(1)}d supply
+      </div>
+      <div className="relative h-1.5 w-full rounded-full bg-slate-200">
+        <div
+          className="absolute left-0 top-0 h-full rounded-full transition-all"
+          style={{ width: `${fillPct}%`, backgroundColor: c?.hex ?? "#94a3b8" }}
+        />
+        {markerPct !== null ? (
+          <div
+            className="absolute top-0 h-full w-px bg-slate-400"
+            style={{ left: `${markerPct}%` }}
+            aria-hidden="true"
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function Sparkline({ data, color }: { data: number[]; color: string }) {
+  if (data.length < 2) return null;
+
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+  const w = 80;
+  const h = 28;
+
+  const pts = data
+    .map((v, i) => {
+      const x = (i / (data.length - 1)) * w;
+      const y = h - ((v - min) / range) * (h - 2) - 1;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+
+  const fillPts = `0,${h} ${pts} ${w},${h}`;
+
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden="true" className="overflow-visible">
+      <polygon points={fillPts} fill={color} fillOpacity={0.12} />
+      <polyline points={pts} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ForecastCell({
+  row,
+  horizonDays,
+  generating,
+  sparklineData
+}: {
+  row: DrugRow;
+  horizonDays: number;
+  generating: boolean;
+  sparklineData: number[] | null;
+}) {
+  const status = normalizedReorderStatus(row.forecast?.reorder_status);
+  const color = status && status in STATUS_COLORS ? STATUS_COLORS[status as keyof typeof STATUS_COLORS].hex : "#94a3b8";
+
+  if (generating) {
+    return <Loader2 className="h-4 w-4 animate-spin text-pharma-teal" aria-hidden="true" />;
+  }
+
+  if (row.forecast?.predicted_quantity === null || row.forecast?.predicted_quantity === undefined) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+
+  return (
+    <div className="space-y-1">
+      <div className="text-sm text-slate-700">
+        <span className="text-lg font-bold text-slate-900">{row.forecast.predicted_quantity}</span>
+        <span className="ml-1 text-muted-foreground">/ {horizonDays}d</span>
+      </div>
+      {sparklineData && sparklineData.length >= 2 ? (
+        <Sparkline data={sparklineData} color={color} />
+      ) : (
+        <div className="h-7 w-20 rounded bg-slate-100" aria-hidden="true" />
+      )}
+    </div>
+  );
 }
 
 function DashboardEmptyState({ hasSuccessfulUpload }: { hasSuccessfulUpload: boolean }) {

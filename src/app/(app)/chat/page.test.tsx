@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ChatPage from "./page";
 import { listChatConversationHistory, listChatConversations, sendChatMessage } from "@/lib/api/chat";
 
+let mockSearch = "";
 let mockAppContext = {
   authReady: true,
   currentLocation: {
@@ -23,6 +24,10 @@ vi.mock("@/lib/supabase/client", () => ({
 
 vi.mock("@/lib/supabase/session", () => ({
   getBackendAccessToken: vi.fn(async () => "access-token")
+}));
+
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => new URLSearchParams(mockSearch)
 }));
 
 vi.mock("@/lib/api/chat", async () => {
@@ -90,6 +95,7 @@ beforeEach(() => {
   mockSendChatMessage.mockReset();
   mockListChatConversations.mockReset();
   mockListChatConversationHistory.mockReset();
+  mockSearch = "";
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     callback(0);
     return 0;
@@ -151,6 +157,29 @@ describe("Chat route", () => {
     expect(await screen.findByText("Order 10 units of amoxicillin.")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /2 messages/i })).toBeInTheDocument();
     expect(mockListChatConversationHistory).toHaveBeenCalledWith("location-1", "conversation-1", "access-token");
+  });
+
+  it("prefills a review prompt from the query string", async () => {
+    mockListChatConversations.mockResolvedValue([
+      {
+        conversation_id: "conversation-1",
+        location_id: "location-1",
+        user_id: "user-1",
+        started_at: "2026-04-21T10:00:00Z",
+        last_message_at: "2026-04-21T10:05:00Z",
+        message_count: 2
+      }
+    ]);
+    mockSearch = "message=Review%20this%20purchase%20order%3A%20Purchase%20Order%20%E2%80%94%20Apr%2020%2C%202026%20%E2%80%94%201%20item";
+
+    renderChatPage();
+
+    const input = await screen.findByRole("textbox");
+    expect(input).toHaveValue("Review this purchase order: Purchase Order — Apr 20, 2026 — 1 item");
+    await waitFor(() => expect(screen.queryByText("Loading conversation history...")).not.toBeInTheDocument());
+    expect(screen.getByRole("tab", { name: /new conversation.*unsaved draft/i })).toBeInTheDocument();
+    expect(screen.getByText("Unsaved draft")).toBeInTheDocument();
+    expect(mockListChatConversationHistory).not.toHaveBeenCalled();
   });
 
   it("sends chat requests with a conversation_id", async () => {

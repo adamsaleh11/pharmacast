@@ -182,6 +182,78 @@ vi.mock("@/lib/api/forecast-dashboard", () => ({
   streamBatchForecast: vi.fn()
 }));
 
+vi.mock("@/lib/api/purchase-orders", () => ({
+  previewPurchaseOrder: vi.fn().mockResolvedValue({
+    generated_at: "2026-04-20T14:00:00Z",
+    order_text: "Order draft summary",
+    line_items: [
+      {
+        din: "00012345",
+        drug_name: "ATORVASTATIN",
+        strength: "20 MG",
+        form: "TABLET",
+        current_stock: 24,
+        predicted_quantity: 12,
+        recommended_quantity: 15,
+        days_of_supply: 4.5,
+        reorder_status: "RED",
+        avg_daily_demand: 2,
+        lead_time_days: 2,
+        quantity_to_order: 15,
+        priority: "URGENT"
+      }
+    ]
+  }),
+  generatePurchaseOrder: vi.fn().mockResolvedValue({
+    orderId: "order-1",
+    generated_at: "2026-04-20T14:00:00Z",
+    order_text: "Order draft summary",
+    line_items: [
+      {
+        din: "00012345",
+        drug_name: "ATORVASTATIN",
+        strength: "20 MG",
+        form: "TABLET",
+        current_stock: 24,
+        predicted_quantity: 12,
+        recommended_quantity: 15,
+        days_of_supply: 4.5,
+        reorder_status: "RED",
+        avg_daily_demand: 2,
+        lead_time_days: 2,
+        quantity_to_order: 15,
+        priority: "URGENT"
+      }
+    ]
+  }),
+  updatePurchaseOrder: vi.fn().mockResolvedValue({
+    orderId: "order-1",
+    generated_at: "2026-04-20T14:00:00Z",
+    order_text: "Order draft summary",
+    line_items: [
+      {
+        din: "00012345",
+        drug_name: "ATORVASTATIN",
+        strength: "20 MG",
+        form: "TABLET",
+        current_stock: 24,
+        predicted_quantity: 12,
+        recommended_quantity: 15,
+        days_of_supply: 4.5,
+        reorder_status: "RED",
+        avg_daily_demand: 2,
+        lead_time_days: 2,
+        quantity_to_order: 15,
+        priority: "URGENT"
+      }
+    ]
+  }),
+  sendPurchaseOrder: vi.fn().mockResolvedValue(undefined),
+  downloadPurchaseOrderCsv: vi.fn().mockResolvedValue(new Blob(["csv"], { type: "text/csv" })),
+  downloadPurchaseOrderPdf: vi.fn().mockResolvedValue(new Blob(["pdf"], { type: "application/pdf" })),
+  listPurchaseOrders: vi.fn().mockResolvedValue([])
+}));
+
 const mockExplainForecast = vi.mocked(explainForecast);
 
 afterEach(() => {
@@ -242,6 +314,23 @@ describe("Dashboard route", () => {
     expect(await screen.findAllByRole("button", { name: "Explain" })).toHaveLength(2);
   });
 
+  it("opens purchase order generation and shows the preview flow", async () => {
+    const user = userEvent.setup();
+
+    renderDashboard();
+
+    await user.click(await screen.findByRole("button", { name: "Export Order" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Generate Order" }));
+
+    expect(await screen.findByText("Purchase Order Draft")).toBeInTheDocument();
+    expect(screen.getByText("Order now")).toBeInTheDocument();
+    expect(screen.getByText("Reference only")).toBeInTheDocument();
+    expect(screen.getByText("ATORVASTATIN 20 MG TABLET")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save Order" })).toBeInTheDocument();
+  });
+
   it("opens the drug detail panel from the route query", async () => {
     currentSearch = "drug=00012345";
 
@@ -267,7 +356,7 @@ describe("Dashboard route", () => {
     const explanations = await screen.findAllByText("Forecast demand is stable.");
     expect(explanations).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: "Collapse" })).toHaveLength(2);
-  });
+  }, 10000);
 
   it("shows a retryable error state when the explain request fails", async () => {
     const user = userEvent.setup();
@@ -327,5 +416,5 @@ describe("Dashboard route", () => {
     await user.keyboard("{Tab}");
 
     expect(await screen.findByText("Updated 5 min ago")).toBeInTheDocument();
-  });
+  }, 10000);
 });

@@ -29,8 +29,6 @@
     --status-red: 0 72% 51%;
     --surface: 0 0% 100%;
     --text-muted: 217 15% 42%;
-    --font-geist-sans: "Geist Sans", "Geist", Arial, sans-serif;
-    --font-geist-mono: "Geist Mono", "SFMono-Regular", Consolas, monospace;
   }
 
   * {
@@ -38,6 +36,6 @@
   }
 
   body {
-    @apply bg-background text-foreground antialiased;
+    @apply bg-background font-sans text-foreground antialiased;
   }
 }

@@ -3,10 +3,11 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
-import { Bell, Building2, LogOut, MapPin, Menu, Pill } from "lucide-react";
+import { Building2, LogOut, MapPin, Menu, Pill } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { productNavigation } from "@/components/app-shell/navigation";
+import { NotificationBell } from "@/components/product/notification-bell";
 import { acknowledgeBackendLogout } from "@/lib/api/auth";
 import { setChatSidebarSlot } from "@/lib/chat-sidebar-slot";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -91,9 +92,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
 
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" aria-label="Notifications">
-              <Bell className="h-5 w-5" aria-hidden="true" />
-            </Button>
+            <NotificationBell organizationId={organization?.id} />
             <div className="flex items-center gap-2 rounded-md border border-slate-200 px-2 py-1.5">
               <Avatar>
                 <AvatarFallback>{fallback}</AvatarFallback>

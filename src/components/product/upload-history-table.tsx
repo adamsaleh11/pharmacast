@@ -123,11 +123,11 @@ export function UploadHistoryTable({ locationId }: UploadHistoryTableProps) {
                       <div className="flex flex-wrap gap-3">
                         <span>
                           <span className="text-slate-400">Rows:</span>{" "}
-                          <span className="font-medium text-slate-700">{summary.total_rows}</span>
+                          <span className="font-mono font-medium text-slate-700">{summary.total_rows}</span>
                         </span>
                         <span>
                           <span className="text-slate-400">Drugs:</span>{" "}
-                          <span className="font-medium text-slate-700">{summary.unique_dins}</span>
+                          <span className="font-mono font-medium text-slate-700">{summary.unique_dins}</span>
                         </span>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
@@ -136,8 +136,8 @@ export function UploadHistoryTable({ locationId }: UploadHistoryTableProps) {
                         </Badge>
                         {backtest ? (
                           <span className="text-slate-500">
-                            WAPE {formatBacktestPercent(backtest.wape)} · Coverage{" "}
-                            {formatBacktestPercent(backtest.interval_coverage)}
+                            WAPE <span className="font-mono">{formatBacktestPercent(backtest.wape)}</span> · Coverage{" "}
+                            <span className="font-mono">{formatBacktestPercent(backtest.interval_coverage)}</span>
                           </span>
                         ) : (
                           <span className="text-slate-400">{backtestDisplay.description}</span>

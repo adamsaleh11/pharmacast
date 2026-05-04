@@ -24,7 +24,7 @@ export function StatCard({ title, value, detail, icon: Icon, tone = "navy" }: St
       <CardContent className="flex items-start justify-between gap-4 p-4">
         <div>
           <p className="text-sm text-muted-foreground">{title}</p>
-          <p className="mt-2 text-2xl font-semibold tracking-normal text-foreground">{value}</p>
+          <p className="mt-2 font-mono text-2xl font-semibold tracking-normal text-foreground">{value}</p>
           <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
         </div>
         <div className={cn("rounded-md p-2", toneClasses[tone])}>

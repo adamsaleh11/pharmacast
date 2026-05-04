@@ -550,7 +550,7 @@ export function DrugDetailPanel({
                               setStockDraft(currentStock === null ? "" : String(currentStock));
                             }}
                           >
-                            <span className="text-lg font-semibold">
+                            <span className="font-mono text-lg font-semibold">
                               {currentStock === null ? "Enter quantity" : `${currentStock} units`}
                             </span>
                             {saveStockMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
@@ -583,13 +583,13 @@ export function DrugDetailPanel({
                               <div className="grid gap-3 text-sm sm:grid-cols-3">
                                 <div>
                                   <div className="text-xs uppercase text-muted-foreground">Predicted demand</div>
-                                  <div className="mt-1 font-medium">{forecast.predicted_quantity} units / {forecast.forecast_horizon_days} days</div>
+                                  <div className="mt-1 font-mono font-medium">{forecast.predicted_quantity} units / {forecast.forecast_horizon_days} days</div>
                                 </div>
                                 <div>
                                   <div className="text-xs uppercase text-muted-foreground">Days of supply</div>
                                   <div
                                     className={cn(
-                                      "mt-1 font-semibold",
+                                      "mt-1 font-mono font-semibold",
                                       forecast.days_of_supply < 3 && "text-red-700",
                                       forecast.days_of_supply >= 3 && forecast.days_of_supply <= 7 && "text-amber-700",
                                       forecast.days_of_supply > 7 && "text-green-700"
@@ -727,7 +727,7 @@ export function DrugDetailPanel({
                               </div>
                               <div
                                 className={cn(
-                                  "shrink-0 font-semibold",
+                                  "shrink-0 font-mono font-semibold",
                                   adjustment.adjustment_quantity > 0 && "text-green-700",
                                   adjustment.adjustment_quantity < 0 && "text-red-700",
                                   adjustment.adjustment_quantity === 0 && "text-muted-foreground"

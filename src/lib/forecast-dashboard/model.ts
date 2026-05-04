@@ -75,9 +75,19 @@ function readThresholdField(value: Record<string, unknown>) {
     return null;
   }
 
+  const redThresholdDays = typeof candidate.red_threshold_days === "number" && Number.isFinite(candidate.red_threshold_days)
+    ? candidate.red_threshold_days
+    : undefined;
+
+  const amberThresholdDays = typeof candidate.amber_threshold_days === "number" && Number.isFinite(candidate.amber_threshold_days)
+    ? candidate.amber_threshold_days
+    : undefined;
+
   return {
     lead_time_days: leadTimeDays,
-    safety_multiplier: safetyMultiplier
+    safety_multiplier: safetyMultiplier,
+    red_threshold_days: redThresholdDays,
+    amber_threshold_days: amberThresholdDays
   };
 }
 

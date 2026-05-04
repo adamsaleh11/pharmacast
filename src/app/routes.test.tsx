@@ -10,8 +10,10 @@ import ResetPasswordPage from "./reset-password/page";
 import OnboardingPage from "./onboarding/page";
 
 vi.mock("next/navigation", () => ({
+  usePathname: () => "/settings",
   useRouter: () => ({
     push: vi.fn(),
+    replace: vi.fn(),
     refresh: vi.fn()
   }),
   useSearchParams: () => new URLSearchParams()

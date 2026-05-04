@@ -6,6 +6,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -355,7 +356,7 @@ function ChatSidebarConversationItem({
           <div className="truncate text-sm font-medium text-white">{conversation.label}</div>
           <div className="mt-1 line-clamp-2 text-xs leading-5 text-white/70">{conversation.preview}</div>
         </div>
-        <div className="shrink-0 rounded-full bg-white/10 px-2 py-1 text-[11px] font-medium text-white/80">
+        <div className="shrink-0 rounded-full bg-white/10 px-2 py-1 font-mono text-[11px] font-medium text-white/80">
           {conversation.messageCount}
         </div>
       </div>
@@ -369,8 +370,10 @@ function ChatSidebarConversationItem({
 
 function ChatWorkspace({ authReady, locationId }: { authReady: boolean; locationId: string | null }) {
   const queryClient = useQueryClient();
+  const searchParams = useSearchParams();
   const chatSidebarSlot = useSyncExternalStore(subscribeChatSidebarSlot, getChatSidebarSlot, () => null);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const seededMessage = searchParams.get("message")?.trim() ?? "";
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(() => (seededMessage ? createId() : null));
   const [threadMessages, setThreadMessages] = useState<ThreadMessage[]>([]);
   const [conversationHistory, setConversationHistory] = useState<ChatConversationMessage[]>([]);
   const [archivedThreads, setArchivedThreads] = useState<ArchivedThread[]>([]);
@@ -409,6 +412,15 @@ function ChatWorkspace({ authReady, locationId }: { authReady: boolean; location
     const nextHeight = Math.min(node.scrollHeight, 4 * 24 + 20);
     node.style.height = `${nextHeight}px`;
   }, []);
+
+  useEffect(() => {
+    if (!seededMessage || threadMessagesRef.current.length > 0 || inputValue.trim().length > 0) {
+      return;
+    }
+
+    setInputValue(seededMessage);
+    resizeTextarea();
+  }, [inputValue, resizeTextarea, seededMessage]);
 
   const conversationsQuery = useQuery({
     queryKey: chatConversationsQueryKey(locationId),
@@ -1186,7 +1198,7 @@ function ChatWorkspace({ authReady, locationId }: { authReady: boolean; location
                 <div className="mt-3 flex items-center justify-between gap-3">
                   <div className="min-h-5 text-[11px]">
                     {characterCountVisible ? (
-                      <span className={cn("font-medium", characterCountTone)}>
+                      <span className={cn("font-mono font-medium", characterCountTone)}>
                         {characterCount}/{MAX_CHAT_INPUT_LENGTH}
                       </span>
                     ) : (

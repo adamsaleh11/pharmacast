@@ -5,6 +5,8 @@ export type ReorderStatus = "RED" | "AMBER" | "GREEN";
 export type ForecastThresholdDto = {
   lead_time_days: number;
   safety_multiplier: number;
+  red_threshold_days?: number;
+  amber_threshold_days?: number;
 };
 
 export type ForecastSummaryDto = {

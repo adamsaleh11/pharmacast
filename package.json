@@ -22,11 +22,13 @@
     "@tanstack/react-virtual": "^3.13.24",
     "class-variance-authority": "latest",
     "clsx": "latest",
+    "geist": "^1.7.0",
     "lucide-react": "latest",
     "next": "latest",
     "react": "latest",
     "react-dom": "latest",
     "react-markdown": "^10.1.0",
+    "recharts": "^3.8.1",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "latest"
   },
